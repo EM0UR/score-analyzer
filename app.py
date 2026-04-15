@@ -21,11 +21,5 @@ if st.button("分析"):
         result = run_all_modules(data,ticker,cfg)
         st.subheader("📊 分析結果")
 
-        if isinstance(result, dict):
-            if "total_score" in result:
-                st.metric("総合スコア",result["total_score"])
-
-            for key,value in result.items():
-                st.write(f"{key}:{value}")
-        else:
-            st.write(result)
+        st.write("デバッグ:", type(result))
+        st.write(result.__dict__ if hasattr(result, "__dict__") else result)
