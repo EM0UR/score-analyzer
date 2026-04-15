@@ -1,7 +1,7 @@
 import streamlit as st
-from data.fetcher import fetch_ticker_data
-from scoring.scorer import run_all_modules
-from config import MARKET_CONFIGS
+from buffett_analyzer.data.fetcher import fetch_ticker_data
+from buffett_analyzer.scoring.scorer import run_all_modules
+from buffett_analyzer.config import MARKET_CONFIGS
 
 st.title("Buffett Score Analyzer")
 
