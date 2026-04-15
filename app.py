@@ -19,4 +19,13 @@ if st.button("分析"):
         st.error("データ取得失敗")
     else:
         result = run_all_modules(data,ticker,cfg)
-        st.write(result)
+        st.subheader("📊 分析結果")
+
+        if isinstance(result,dict):
+            if "total_score" in result:
+                st.metric("総合スコア",result["total_score"])
+
+            for key,value in result.items():
+                st.write(f"{key}:{value}")
+        else:
+            st.write(result)
