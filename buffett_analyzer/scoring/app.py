@@ -1,0 +1,22 @@
+import streamlit as st
+from data.fetcher import fetch_ticker_data
+from scoring.scorer import run_all_modules
+from config import MARKET_CONFIGS
+
+st.title("Buffett Score Analyzer")
+
+market = st.selectbox("市場",["us","jp"])
+ticker = st.text_input("銘柄コード")
+
+if st.button("分析"):
+    if market == "jp" and not ticker.endswitch(".T"):
+        ticker += ".T"
+
+    cfg = MARKET_CONFIGS[market]
+    data = fetch_ticker_data(ticker)
+
+    if data is None:
+        st.error("データ取得失敗")
+    else:
+        result = run_all_modules(data,ticker,cfg)
+        st.write(result)
