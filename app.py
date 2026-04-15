@@ -21,7 +21,7 @@ if st.button("分析"):
         result = run_all_modules(data,ticker,cfg)
         st.subheader("📊 分析結果")
 
-        if isinstance(result,dict):
+        if isinstance(result, dict):
             if "total_score" in result:
                 st.metric("総合スコア",result["total_score"])
 
