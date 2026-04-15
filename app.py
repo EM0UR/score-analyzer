@@ -21,5 +21,18 @@ if st.button("分析"):
         result = run_all_modules(data,ticker,cfg)
         st.subheader("📊 分析結果")
 
-        st.write("デバッグ:", type(result))
-        st.write(result.__dict__ if hasattr(result, "__dict__") else result)
+        # データ取り出し
+        data = result.__dict__ if hasattr(result, "__dict__") else result
+        
+        # 総合スコア(デカく表示)
+        total = data.get("total_score") or data.get("score")
+        if total:
+            st.metric("総合スコア", total)
+            
+        st.divider()
+
+        # 各項目をきれいに表示
+        for key, value in data.items():
+            if key in ["total_score", "score"]:
+                continue
+            st.write(f"▶ {key.upper()}: {value}")
