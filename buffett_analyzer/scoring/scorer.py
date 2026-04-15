@@ -70,13 +70,13 @@ def run_all_modules(data: dict, ticker: str, market_config) -> ScoreBreakdown:
     """
     fetch されたデータを全モジュールに渡してスコアを計算し ScoreBreakdown を返す。
     """
-    from metrics.earnings         import analyze_earnings
-    from metrics.capital_efficiency import analyze_capital_efficiency
-    from metrics.financial_health import analyze_financial_health
-    from metrics.owner_earnings   import analyze_owner_earnings
-    from metrics.moat             import analyze_moat
-    from metrics.valuation        import analyze_valuation
-    from metrics.management       import analyze_management
+    from buffett_analyzer.metrics.earnings         import analyze_earnings
+    from buffett_analyzer.metrics.capital_efficiency import analyze_capital_efficiency
+    from buffett_analyzer.metrics.financial_health import analyze_financial_health
+    from buffett_analyzer.metrics.owner_earnings   import analyze_owner_earnings
+    from buffett_analyzer.metrics.moat             import analyze_moat
+    from buffett_analyzer.metrics.valuation        import analyze_valuation
+    from buffett_analyzer.metrics.management       import analyze_management
 
     info     = data.get("info", {})
     fin      = data.get("financials")
