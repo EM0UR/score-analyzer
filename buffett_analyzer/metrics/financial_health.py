@@ -1,134 +1,123 @@
-# metrics/financial_health.py — 財務健全性（D/E比・インタレストカバレッジ）
+financial_health.py
 import numpy as np
-import pandas as pd
-from typing import Dict
+from buffett_analyzer.metrics.utils import safe_row, ttm_latest, annual_values
 
-
-def _safe_row(df: pd.DataFrame, *keys):
-    for k in keys:
-        if k in df.index:
-            return df.loc[k]
-    return None
-
-
-def analyze_financial_health(
-    financials: pd.DataFrame,
-    balance_sheet: pd.DataFrame,
-    cashflow: pd.DataFrame,
-    info: dict,
-    market_config,
-) -> Dict:
-    """満点: 15 点"""
+def analyze_financial_health(financials, balance_sheet, cashflow, info, cfg,
+                              q_balance_sheet=None, q_cashflow=None):
     result = {
-        "score": 0,
-        "max_score": 15,
-        "de_ratio": None,
-        "equity_ratio": None,
-        "interest_coverage": None,
-        "current_ratio": None,
-        "detail": "",
+        "score": 0, "max_score": 15,
+        "de_ratio": None, "equity_ratio": None,
+        "interest_coverage": None, "current_ratio": None,
+        "data_source": "annual",
+        "detail": ""
     }
 
     try:
-        total_debt     = _safe_row(balance_sheet, "Total Debt", "Long Term Debt")
-        total_equity   = _safe_row(balance_sheet, "Stockholders Equity",
-                                   "Total Stockholders Equity", "Common Stock Equity")
-        total_assets   = _safe_row(balance_sheet, "Total Assets")
-        ebit_row       = _safe_row(financials,    "Operating Income", "EBIT", "Ebit")
-        interest_row   = _safe_row(financials,    "Interest Expense")
-        current_assets = _safe_row(balance_sheet, "Current Assets", "Total Current Assets")
-        current_liab   = _safe_row(balance_sheet, "Current Liabilities", "Total Current Liabilities")
+        # ── ① D/E比率（四半期最新 → 年次フォールバック）────────────
+        de = None
+        bs_use = None
 
-        latest = lambda row: float(row.iloc[0]) if row is not None and len(row) > 0 else None
+        if q_balance_sheet is not None and not q_balance_sheet.empty:
+            bs_use = q_balance_sheet
+            result["data_source"] = "quarterly_latest"
+        elif balance_sheet is not None and not balance_sheet.empty:
+            bs_use = balance_sheet
 
-        debt   = latest(total_debt)
-        equity = latest(total_equity)
-        assets = latest(total_assets)
-        ebit   = latest(ebit_row)
-        intr   = latest(interest_row)
-        ca     = latest(current_assets)
-        cl     = latest(current_liab)
+        if bs_use is not None:
+            total_debt = None
+            for col in bs_use.columns[:2]:   # 直近2期を試行
+                eq_row  = safe_row(bs_use, "Stockholders Equity", "Total Stockholder Equity",
+                                   "Common Stock Equity", "Total Equity Gross Minority Interest")
+                ltd_row = safe_row(bs_use, "Long Term Debt", "Long-Term Debt And Capital Lease Obligation")
+                cld_row = safe_row(bs_use, "Current Debt", "Current Long Term Debt",
+                                   "Short Long Term Debt", "Short Term Borrowings")
+                try:
+                    eq  = float(eq_row[col])   if eq_row  is not None else None
+                    ltd = float(ltd_row[col])   if ltd_row is not None else 0
+                    cld = float(cld_row[col])   if cld_row is not None else 0
+                    if eq and eq > 0:
+                        de = (ltd + cld) / eq
+                        total_debt = ltd + cld
+                        break
+                except Exception:
+                    continue
 
-        # D/E Ratio
-        if debt is not None and equity and equity != 0:
-            result["de_ratio"] = debt / abs(equity)
-        elif info.get("debtToEquity"):
-            result["de_ratio"] = info["debtToEquity"] / 100.0  # yfinance は 100倍
+        if de is None:
+            de = (info.get("debtToEquity") or 0) / 100
+        result["de_ratio"] = de
 
-        # 自己資本比率
-        if equity is not None and assets and assets != 0:
-            result["equity_ratio"] = abs(equity) / assets
-        elif info.get("bookValue") and info.get("totalAssets"):
-            shares = info.get("sharesOutstanding", 1)
-            result["equity_ratio"] = (info["bookValue"] * shares) / info["totalAssets"]
+        # ── ② 自己資本比率 ─────────────────────────────────────────
+        if bs_use is not None:
+            try:
+                col     = bs_use.columns[0]
+                eq_row  = safe_row(bs_use, "Stockholders Equity", "Total Stockholder Equity",
+                                   "Common Stock Equity", "Total Equity Gross Minority Interest")
+                ta_row  = safe_row(bs_use, "Total Assets")
+                eq_v    = float(eq_row[col]) if eq_row  is not None else None
+                ta_v    = float(ta_row[col]) if ta_row  is not None else None
+                if eq_v and ta_v and ta_v > 0:
+                    result["equity_ratio"] = eq_v / ta_v
+            except Exception:
+                pass
 
-        # インタレスト・カバレッジ（EBIT/利払い費）
-        if ebit is not None and intr and intr != 0:
-            result["interest_coverage"] = ebit / abs(intr)
-        # info フォールバック
-        if result["interest_coverage"] is None:
-            result["interest_coverage"] = info.get("interestCoverage") or None
+        # ── ③ 流動比率（四半期優先）────────────────────────────────
+        if bs_use is not None:
+            try:
+                col     = bs_use.columns[0]
+                ca_row  = safe_row(bs_use, "Current Assets", "Total Current Assets")
+                cl_row  = safe_row(bs_use, "Current Liabilities", "Total Current Liabilities")
+                ca_v = float(ca_row[col]) if ca_row is not None else None
+                cl_v = float(cl_row[col]) if cl_row is not None else None
+                if ca_v and cl_v and cl_v > 0:
+                    result["current_ratio"] = ca_v / cl_v
+            except Exception:
+                pass
 
-        # 流動比率
-        if ca is not None and cl and cl != 0:
-            result["current_ratio"] = ca / cl
-        elif info.get("currentRatio"):
-            result["current_ratio"] = info["currentRatio"]
+        # ── ④ インタレストカバレッジ（infoから取得が最新）──────────
+        ebit = info.get("ebitda")  # 近似値
+        interest_exp = info.get("totalDebt", 0)
+        ic = info.get("interestCoverage")
+        if ic is None and ebit:
+            int_exp = info.get("interestExpense")
+            if int_exp and int_exp < 0:
+                ic = ebit / abs(int_exp)
+        result["interest_coverage"] = ic
+
+        # ── ⑤ スコアリング ────────────────────────────────────────
+        s = 0
+        if de is not None:
+            if   de <= cfg.de_max_excellent: s += 6
+            elif de <= cfg.de_max_good:      s += 4
+            elif de <= cfg.de_max_ok:        s += 2
+
+        er = result["equity_ratio"]
+        if er is not None:
+            if   er >= 0.60: s += 4
+            elif er >= cfg.equity_ratio_good: s += 3
+            elif er >= 0.25: s += 1
+
+        cr = result["current_ratio"]
+        if cr is not None:
+            if   cr >= 2.0: s += 3
+            elif cr >= 1.5: s += 2
+            elif cr >= 1.0: s += 1
+
+        if ic is not None:
+            if   ic >= 10: s += 2
+            elif ic >= cfg.interest_coverage_good: s += 1
+
+        result["score"] = min(s, 15)
+
+        # ── ⑥ 詳細テキスト ──────────────────────────────────────
+        src  = "四半期" if result["data_source"] == "quarterly_latest" else "年次"
+        de_s = f"D/E {de:.2f}" if de is not None else "D/E —"
+        er_s = f"自己資本比率 {er*100:.0f}%" if er is not None else ""
+        cr_s = f"流動比率 {cr:.1f}x" if cr is not None else ""
+        ic_s = f"IC {ic:.1f}x" if ic is not None else ""
+        result["detail"] = f"{de_s} [{src}]" + (f" | {er_s}" if er_s else "") +                            (f" | {cr_s}" if cr_s else "") + (f" | {ic_s}" if ic_s else "")
 
     except Exception as e:
+        result["score"]  = 2
         result["detail"] = f"計算エラー: {e}"
-        result["score"] = 4
-        return result
 
-    cfg   = market_config
-    score = 0
-
-    # ─── D/E Ratio スコアリング（7点）────────────────────────────────
-    de = result["de_ratio"]
-    if de is not None:
-        if de <= cfg.de_max_excellent:
-            score += 7
-        elif de <= cfg.de_max_good:
-            score += 5
-        elif de <= cfg.de_max_ok:
-            score += 2
-    else:
-        score += 3
-
-    # ─── インタレスト・カバレッジ（5点）────────────────────────────
-    ic = result["interest_coverage"]
-    if ic is not None:
-        if ic >= cfg.interest_coverage_good * 3:    # 15倍以上
-            score += 5
-        elif ic >= cfg.interest_coverage_good * 2:  # 10倍以上
-            score += 4
-        elif ic >= cfg.interest_coverage_good:       # 5倍以上
-            score += 3
-        elif ic >= 2:
-            score += 1
-    else:
-        score += 2
-
-    # ─── 自己資本比率（3点）─────────────────────────────────────────
-    er = result["equity_ratio"]
-    if er is not None:
-        if er >= cfg.equity_ratio_good * 1.5:
-            score += 3
-        elif er >= cfg.equity_ratio_good:
-            score += 2
-        elif er >= 0.20:
-            score += 1
-    else:
-        score += 1
-
-    result["score"] = min(score, 15)
-
-    de_str = f"{de:.2f}" if de is not None else "N/A"
-    er_str = f"{er*100:.1f}%" if er is not None else "N/A"
-    ic_str = f"{ic:.1f}x" if ic is not None else "N/A"
-    cr_str = f"{result['current_ratio']:.1f}x" if result["current_ratio"] is not None else "N/A"
-    result["detail"] = (
-        f"D/E {de_str} | 自己資本比率 {er_str} | "
-        f"インタレストカバレッジ {ic_str} | 流動比率 {cr_str}"
-    )
     return result
