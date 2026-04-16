@@ -1,6 +1,40 @@
 from dataclasses import dataclass, field
 import pandas as pd
 
+# ── フォールバック関数（financial_health.pyが壊れていても動く）──
+def _fallback_health(financials, balance_sheet, cashflow, info, cfg, **kwargs):
+    """financial_health.py のインポートが失敗した場合のフォールバック"""
+    result = {"score": 0, "max_score": 15, "de_ratio": None,
+              "equity_ratio": None, "interest_coverage": None,
+              "current_ratio": None, "data_source": "fallback", "detail": ""}
+    try:
+        de = None
+        raw = info.get("debtToEquity")
+        if raw is not None:
+            de = float(raw) / 100.0
+        result["de_ratio"] = de
+
+        cr = info.get("currentRatio")
+        if cr: result["current_ratio"] = float(cr)
+
+        s = 0
+        if de is not None:
+            if   de <= cfg.de_max_excellent: s += 6
+            elif de <= cfg.de_max_good:      s += 4
+            elif de <= cfg.de_max_ok:        s += 2
+        if cr:
+            cr = float(cr)
+            if   cr >= 2.0: s += 3
+            elif cr >= 1.5: s += 2
+            elif cr >= 1.0: s += 1
+        result["score"]  = min(s, 15)
+        result["detail"] = (f"D/E {de:.2f}" if de else "D/E —") +                            (f" | 流動比率 {cr:.1f}x" if result["current_ratio"] else "") +                            " [info/fallback]"
+    except Exception as e:
+        result["score"]  = 2
+        result["detail"] = f"フォールバック計算エラー: {e}"
+    return result
+
+
 @dataclass
 class ScoreBreakdown:
     earnings:        dict = field(default_factory=dict)
@@ -13,11 +47,11 @@ class ScoreBreakdown:
     jp_fundamentals: dict = field(default_factory=dict)
 
     @property
-    def max_score(self) -> int:
+    def max_score(self):
         return 100 + self.jp_fundamentals.get("max_score", 0)
 
     @property
-    def total(self) -> int:
+    def total(self):
         return (
             self.earnings.get("score", 0) +
             self.capital.get("score", 0)  +
@@ -30,7 +64,7 @@ class ScoreBreakdown:
         )
 
     @property
-    def verdict_en(self) -> str:
+    def verdict_en(self):
         pct = self.total / self.max_score * 100
         if   pct >= 82: return "STRONG BUY"
         elif pct >= 65: return "BUY"
@@ -38,15 +72,11 @@ class ScoreBreakdown:
         else:           return "AVOID"
 
     @property
-    def verdict(self) -> str:
-        return {
-            "STRONG BUY": "強い買い 🟢",
-            "BUY":        "買い 🔵",
-            "WATCH":      "様子見 🟡",
-            "AVOID":      "非推奨 🔴",
-        }.get(self.verdict_en, "—")
+    def verdict(self):
+        return {"STRONG BUY":"強い買い 🟢","BUY":"買い 🔵",
+                "WATCH":"様子見 🟡","AVOID":"非推奨 🔴"}.get(self.verdict_en, "—")
 
-    def verdict_comment(self) -> str:
+    def verdict_comment(self):
         mos = self.valuation.get("margin_of_safety_dcf")
         mos_str = f"{mos:.1f}%" if mos is not None else "不明"
         ve = self.verdict_en
@@ -60,49 +90,74 @@ class ScoreBreakdown:
             return f"バフェット基準への適合度が低い状況です。Margin of Safety: {mos_str}。他の銘柄を優先することをお勧めします。"
 
 
-def run_all_modules(data: dict, ticker: str, market_config) -> ScoreBreakdown:
-    from buffett_analyzer.metrics.earnings           import analyze_earnings
-    from buffett_analyzer.metrics.capital_efficiency import analyze_capital_efficiency
-    from buffett_analyzer.metrics.financial_health   import analyze_financial_health
-    from buffett_analyzer.metrics.owner_earnings     import analyze_owner_earnings
-    from buffett_analyzer.metrics.moat               import analyze_moat
-    from buffett_analyzer.metrics.valuation          import analyze_valuation
-    from buffett_analyzer.metrics.management         import analyze_management
-    from buffett_analyzer.metrics.jp_fundamentals    import analyze_jp_fundamentals
-
+def run_all_modules(data, ticker, market_config):
+    cfg  = market_config
     info = data.get("info", {})
-
-    # 年次データ（長期トレンド・EPS一貫性・Moat分析用）
-    fin = data.get("financials")    or pd.DataFrame()
-    bs  = data.get("balance_sheet") or pd.DataFrame()
-    cf  = data.get("cashflow")      or pd.DataFrame()
-
-    # 四半期データ（最新FCF・最新B/S・TTMマージン用）
+    fin  = data.get("financials")    or pd.DataFrame()
+    bs   = data.get("balance_sheet") or pd.DataFrame()
+    cf   = data.get("cashflow")      or pd.DataFrame()
     q_fin = data.get("q_financials")    or pd.DataFrame()
     q_bs  = data.get("q_balance_sheet") or pd.DataFrame()
     q_cf  = data.get("q_cashflow")      or pd.DataFrame()
 
     bd = ScoreBreakdown()
 
-    # 年次データのみ使用（長期履歴が重要なモジュール）
-    bd.earnings = analyze_earnings(fin, info)
-    bd.capital  = analyze_capital_efficiency(fin, bs, info, market_config)
-    bd.moat     = analyze_moat(fin, cf, info, market_config)
+    # ── 各モジュール（失敗しても次へ進む）────────────────────────
+    def _safe(fn, *args, **kwargs):
+        try: return fn(*args, **kwargs)
+        except Exception as e:
+            return {"score": 0, "max_score": 10, "detail": f"モジュールエラー: {e}"}
 
-    # 四半期データを優先使用（最新業績が重要なモジュール）
-    bd.health = analyze_financial_health(
-        fin, bs, cf, info, market_config,
-        q_balance_sheet=q_bs,   # ← 最新四半期B/S
-    )
-    bd.oe = analyze_owner_earnings(
-        fin, cf, bs, info, market_config,
-        q_cashflow=q_cf,         # ← 四半期TTM FCF
-        q_financials=q_fin,      # ← 四半期TTM 売上
-    )
+    try:
+        from buffett_analyzer.metrics.earnings import analyze_earnings
+        bd.earnings = _safe(analyze_earnings, fin, info)
+    except Exception as e:
+        bd.earnings = {"score": 0, "max_score": 20, "detail": f"import失敗: {e}"}
 
-    # バリュエーション・経営陣・JP指標
-    bd.valuation       = analyze_valuation(fin, cf, bs, info, bd.oe, market_config)
-    bd.management      = analyze_management(fin, cf, bs, info, market_config)
-    bd.jp_fundamentals = analyze_jp_fundamentals(fin, cf, bs, info, market_config)
+    try:
+        from buffett_analyzer.metrics.capital_efficiency import analyze_capital_efficiency
+        bd.capital = _safe(analyze_capital_efficiency, fin, bs, info, cfg)
+    except Exception as e:
+        bd.capital = {"score": 0, "max_score": 20, "detail": f"import失敗: {e}"}
+
+    # financial_health は壊れていてもフォールバックで動作させる
+    try:
+        from buffett_analyzer.metrics.financial_health import analyze_financial_health
+        bd.health = _safe(analyze_financial_health, fin, bs, cf, info, cfg,
+                          q_balance_sheet=q_bs, q_cashflow=q_cf)
+    except Exception as e:
+        bd.health = _fallback_health(fin, bs, cf, info, cfg)
+        bd.health["detail"] += f" ※import失敗({type(e).__name__})"
+
+    try:
+        from buffett_analyzer.metrics.owner_earnings import analyze_owner_earnings
+        bd.oe = _safe(analyze_owner_earnings, fin, cf, bs, info, cfg,
+                      q_cashflow=q_cf, q_financials=q_fin)
+    except Exception as e:
+        bd.oe = {"score": 0, "max_score": 20, "detail": f"import失敗: {e}"}
+
+    try:
+        from buffett_analyzer.metrics.moat import analyze_moat
+        bd.moat = _safe(analyze_moat, fin, cf, info, cfg)
+    except Exception as e:
+        bd.moat = {"score": 0, "max_score": 15, "detail": f"import失敗: {e}"}
+
+    try:
+        from buffett_analyzer.metrics.valuation import analyze_valuation
+        bd.valuation = _safe(analyze_valuation, fin, cf, bs, info, bd.oe, cfg)
+    except Exception as e:
+        bd.valuation = {"score": 0, "max_score": 10, "detail": f"import失敗: {e}"}
+
+    try:
+        from buffett_analyzer.metrics.management import analyze_management
+        bd.management = _safe(analyze_management, fin, cf, bs, info, cfg)
+    except Exception as e:
+        bd.management = {"score": 0, "max_score": 10, "detail": f"import失敗: {e}"}
+
+    try:
+        from buffett_analyzer.metrics.jp_fundamentals import analyze_jp_fundamentals
+        bd.jp_fundamentals = _safe(analyze_jp_fundamentals, fin, cf, bs, info, cfg)
+    except Exception as e:
+        bd.jp_fundamentals = {"score": 0, "max_score": 0, "detail": f"import失敗: {e}"}
 
     return bd
