@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import pandas as pd
 
 @dataclass
 class ScoreBreakdown:
@@ -19,12 +20,12 @@ class ScoreBreakdown:
     def total(self) -> int:
         return (
             self.earnings.get("score", 0) +
-            self.capital.get("score", 0) +
-            self.health.get("score", 0) +
-            self.oe.get("score", 0) +
-            self.moat.get("score", 0) +
-            self.valuation.get("score", 0) +
-            self.management.get("score", 0) +
+            self.capital.get("score", 0)  +
+            self.health.get("score", 0)   +
+            self.oe.get("score", 0)       +
+            self.moat.get("score", 0)     +
+            self.valuation.get("score", 0)+
+            self.management.get("score", 0)+
             self.jp_fundamentals.get("score", 0)
         )
 
@@ -68,20 +69,40 @@ def run_all_modules(data: dict, ticker: str, market_config) -> ScoreBreakdown:
     from buffett_analyzer.metrics.valuation          import analyze_valuation
     from buffett_analyzer.metrics.management         import analyze_management
     from buffett_analyzer.metrics.jp_fundamentals    import analyze_jp_fundamentals
-    import pandas as pd
 
     info = data.get("info", {})
-    fin  = data.get("financials")  or pd.DataFrame()
-    bs   = data.get("balance_sheet") or pd.DataFrame()
-    cf   = data.get("cashflow")    or pd.DataFrame()
+
+    # 年次データ（長期トレンド・EPS一貫性・Moat分析用）
+    fin = data.get("financials")    or pd.DataFrame()
+    bs  = data.get("balance_sheet") or pd.DataFrame()
+    cf  = data.get("cashflow")      or pd.DataFrame()
+
+    # 四半期データ（最新FCF・最新B/S・TTMマージン用）
+    q_fin = data.get("q_financials")    or pd.DataFrame()
+    q_bs  = data.get("q_balance_sheet") or pd.DataFrame()
+    q_cf  = data.get("q_cashflow")      or pd.DataFrame()
 
     bd = ScoreBreakdown()
-    bd.earnings        = analyze_earnings(fin, info)
-    bd.capital         = analyze_capital_efficiency(fin, bs, info, market_config)
-    bd.health          = analyze_financial_health(fin, bs, cf, info, market_config)
-    bd.oe              = analyze_owner_earnings(fin, cf, bs, info, market_config)
-    bd.moat            = analyze_moat(fin, cf, info, market_config)
+
+    # 年次データのみ使用（長期履歴が重要なモジュール）
+    bd.earnings = analyze_earnings(fin, info)
+    bd.capital  = analyze_capital_efficiency(fin, bs, info, market_config)
+    bd.moat     = analyze_moat(fin, cf, info, market_config)
+
+    # 四半期データを優先使用（最新業績が重要なモジュール）
+    bd.health = analyze_financial_health(
+        fin, bs, cf, info, market_config,
+        q_balance_sheet=q_bs,   # ← 最新四半期B/S
+    )
+    bd.oe = analyze_owner_earnings(
+        fin, cf, bs, info, market_config,
+        q_cashflow=q_cf,         # ← 四半期TTM FCF
+        q_financials=q_fin,      # ← 四半期TTM 売上
+    )
+
+    # バリュエーション・経営陣・JP指標
     bd.valuation       = analyze_valuation(fin, cf, bs, info, bd.oe, market_config)
     bd.management      = analyze_management(fin, cf, bs, info, market_config)
     bd.jp_fundamentals = analyze_jp_fundamentals(fin, cf, bs, info, market_config)
+
     return bd
