@@ -1,151 +1,114 @@
-# metrics/owner_earnings.py — Owner Earnings / FCF 分析
+owner_earnings.py
 import numpy as np
-import pandas as pd
-from typing import Dict, Optional
+from buffett_analyzer.metrics.utils import safe_row, ttm_sum, annual_values, cagr
 
-
-def _safe_row(df: pd.DataFrame, *keys):
-    for k in keys:
-        if k in df.index:
-            return df.loc[k]
-    return None
-
-
-def analyze_owner_earnings(
-    financials: pd.DataFrame,
-    cashflow: pd.DataFrame,
-    balance_sheet: pd.DataFrame,
-    info: dict,
-    market_config,
-) -> Dict:
-    """
-    バフェット流 Owner Earnings = 営業CF − 維持的CapEx を計算。
-    満点: 20 点
-    """
+def analyze_owner_earnings(financials, cashflow, balance_sheet, info, cfg,
+                            q_cashflow=None, q_financials=None):
     result = {
-        "score": 0,
-        "max_score": 20,
-        "owner_earnings_latest": None,
-        "owner_earnings_cagr": None,
-        "fcf_margin_latest": None,
-        "fcf_yield_latest": None,
-        "owner_earnings_series": None,
-        "detail": "",
+        "score": 0, "max_score": 20,
+        "fcf_ttm": None, "fcf_margin": None,
+        "oe_cagr": None, "fcf_yield": None,
+        "data_source": "annual",
+        "detail": ""
     }
 
     try:
-        op_cf_row = _safe_row(cashflow, "Total Cash From Operating Activities",
-                               "Operating Cash Flow", "Cash From Operations")
-        capex_row = _safe_row(cashflow, "Capital Expenditures", "Purchase Of Property Plant And Equipment",
-                               "Capital Expenditure")
-        revenue_row = _safe_row(financials, "Total Revenue", "Revenue")
+        # ── ① TTM FCF（四半期優先・年次フォールバック）──────────────
+        fcf_ttm = None
 
-        if op_cf_row is None or capex_row is None:
-            result["detail"] = "キャッシュフローデータ不足"
-            result["score"] = 6
-            return result
+        if q_cashflow is not None and not q_cashflow.empty:
+            op  = ttm_sum(q_cashflow,
+                          "Operating Cash Flow", "Total Cash From Operating Activities",
+                          "Cash Flow From Continuing Operating Activities")
+            cap = ttm_sum(q_cashflow,
+                          "Capital Expenditure", "Purchase Of Property Plant And Equipment",
+                          "Capital Expenditures")
+            if op is not None:
+                fcf_ttm = op + (cap if cap is not None else 0)  # capexは通常負値
+                result["data_source"] = "quarterly_TTM"
 
-        # 共通カラムで計算
-        cols = op_cf_row.index.intersection(capex_row.index)
-        if len(cols) == 0:
-            result["detail"] = "OCF/CapEx のカラム不一致"
-            result["score"] = 6
-            return result
+        if fcf_ttm is None:
+            # 年次フォールバック（最新年度）
+            op_a  = annual_values(cashflow,
+                                  "Operating Cash Flow", "Total Cash From Operating Activities",
+                                  "Cash Flow From Continuing Operating Activities")
+            cap_a = annual_values(cashflow,
+                                  "Capital Expenditure", "Purchase Of Property Plant And Equipment",
+                                  "Capital Expenditures")
+            if op_a:
+                cap_v = cap_a[0] if cap_a else 0
+                fcf_ttm = op_a[0] + cap_v
+                result["data_source"] = "annual_latest"
 
-        op_cf = op_cf_row[cols]
-        capex = capex_row[cols]
+        result["fcf_ttm"] = fcf_ttm
 
-        # CapEx はマイナス値で格納されているため絶対値を引く
-        oe_series = op_cf - capex.abs()
-        oe_series = oe_series.sort_index()
-        result["owner_earnings_series"] = oe_series
+        # ── ② FCFマージン（TTM売上との比率）─────────────────────────
+        rev_ttm = None
+        if q_financials is not None and not q_financials.empty:
+            rev_ttm = ttm_sum(q_financials, "Total Revenue", "Revenue", "Net Revenue")
+        if rev_ttm is None:
+            revs = annual_values(financials, "Total Revenue", "Revenue", "Net Revenue")
+            rev_ttm = revs[0] if revs else None
 
-        # 最新値
-        latest_oe = float(oe_series.iloc[-1])
-        result["owner_earnings_latest"] = latest_oe
+        if fcf_ttm and rev_ttm and rev_ttm > 0:
+            result["fcf_margin"] = fcf_ttm / rev_ttm
 
-        # CAGR（最低2期）
-        n = len(oe_series)
-        if n >= 2:
-            first, last = oe_series.iloc[0], oe_series.iloc[-1]
-            if first > 0 and last > 0:
-                result["owner_earnings_cagr"] = (last / first) ** (1 / (n - 1)) - 1
+        # ── ③ FCF成長CAGR（年次データで長期トレンドを計算）──────────
+        op_hist  = annual_values(cashflow,
+                                 "Operating Cash Flow", "Total Cash From Operating Activities",
+                                 "Cash Flow From Continuing Operating Activities")
+        cap_hist = annual_values(cashflow,
+                                 "Capital Expenditure", "Purchase Of Property Plant And Equipment",
+                                 "Capital Expenditures")
+        fcf_hist = []
+        for i, op_v in enumerate(op_hist):
+            cap_v = cap_hist[i] if i < len(cap_hist) else 0
+            fcf_hist.append(op_v + cap_v)
 
-        # FCF マージン（最新期）
-        if revenue_row is not None:
-            rev_cols = revenue_row.index.intersection(capex_row.index)
-            if len(rev_cols) > 0:
-                latest_rev = float(revenue_row[rev_cols[0]])
-                if latest_rev != 0:
-                    result["fcf_margin_latest"] = latest_oe / latest_rev
+        oe_cagr = cagr(fcf_hist)
+        result["oe_cagr"] = oe_cagr
 
-        # FCF Yield
-        market_cap = info.get("marketCap")
-        if market_cap and market_cap != 0:
-            result["fcf_yield_latest"] = latest_oe / market_cap
+        # ── ④ FCFイールド（時価総額比）────────────────────────────
+        mc = info.get("marketCap")
+        if fcf_ttm and mc and mc > 0:
+            result["fcf_yield"] = fcf_ttm / mc
+
+        # ── ⑤ スコアリング ────────────────────────────────────────
+        s = 0
+        fm = result["fcf_margin"]
+        if fm is not None:
+            if   fm >= 0.20: s += 6
+            elif fm >= cfg.fcf_margin_good: s += 4
+            elif fm >= 0.04: s += 2
+
+        if oe_cagr is not None:
+            if   oe_cagr >= 0.12: s += 6
+            elif oe_cagr >= cfg.min_oe_cagr: s += 4
+            elif oe_cagr >= 0.02: s += 2
+
+        fy = result["fcf_yield"]
+        if fy is not None:
+            if   fy >= 0.06: s += 5
+            elif fy >= cfg.fcf_yield_good: s += 3
+            elif fy >= 0.02: s += 1
+        elif fcf_ttm and fcf_ttm > 0:
+            s += 3  # 時価総額不明でもFCF正値なら加点
+
+        result["score"] = min(s, 20)
+
+        # ── ⑥ 詳細テキスト ──────────────────────────────────────
+        src   = "四半期TTM" if result["data_source"] == "quarterly_TTM" else "年次"
+        fcf_b = f"{fcf_ttm/1e9:.2f}B" if fcf_ttm and abs(fcf_ttm) >= 1e9 else (
+                f"{fcf_ttm/1e6:.0f}M" if fcf_ttm else "—")
+        fm_s  = f"{fm*100:.1f}%" if fm else "—"
+        cg_s  = f"{oe_cagr*100:.1f}%" if oe_cagr else "—"
+        fy_s  = f"{fy*100:.1f}%" if fy else "—"
+        result["detail"] = (
+            f"FCF {fcf_b} [{src}] | マージン {fm_s} | CAGR(年次) {cg_s} | FCFイールド {fy_s}"
+        )
 
     except Exception as e:
+        result["score"]  = 3
         result["detail"] = f"計算エラー: {e}"
-        result["score"] = 5
-        return result
 
-    cfg   = market_config
-    score = 0
-    oe_cagr  = result["owner_earnings_cagr"]
-    fcf_margin = result["fcf_margin_latest"]
-    fcf_yield  = result["fcf_yield_latest"]
-
-    # ─── OE の水準（最新値がプラスか）（5点）────────────────────────
-    if result["owner_earnings_latest"] is not None:
-        if result["owner_earnings_latest"] > 0:
-            score += 5
-
-    # ─── OE CAGR スコアリング（8点）─────────────────────────────────
-    if oe_cagr is not None:
-        if oe_cagr >= 0.12:
-            score += 8
-        elif oe_cagr >= 0.08:
-            score += 6
-        elif oe_cagr >= cfg.min_oe_cagr:
-            score += 3
-        elif oe_cagr >= 0:
-            score += 1
-    else:
-        score += 3
-
-    # ─── FCF マージン（4点）─────────────────────────────────────────
-    if fcf_margin is not None:
-        if fcf_margin >= cfg.fcf_margin_good * 2:
-            score += 4
-        elif fcf_margin >= cfg.fcf_margin_good:
-            score += 3
-        elif fcf_margin >= cfg.fcf_margin_good * 0.5:
-            score += 1
-    else:
-        score += 1
-
-    # ─── FCF Yield（3点）────────────────────────────────────────────
-    if fcf_yield is not None:
-        if fcf_yield >= cfg.fcf_yield_good * 1.5:
-            score += 3
-        elif fcf_yield >= cfg.fcf_yield_good:
-            score += 2
-        elif fcf_yield >= cfg.fcf_yield_good * 0.5:
-            score += 1
-    else:
-        score += 1
-
-    result["score"] = min(score, 20)
-
-    sym = market_config.currency_symbol
-    oe_val = result["owner_earnings_latest"]
-    oe_str = f"{sym}{oe_val/1e9:.2f}B" if oe_val and abs(oe_val) >= 1e9 else              f"{sym}{oe_val/1e6:.1f}M" if oe_val else "N/A"
-    cagr_str   = f"{oe_cagr*100:.1f}%"    if oe_cagr  is not None else "N/A"
-    margin_str = f"{fcf_margin*100:.1f}%" if fcf_margin is not None else "N/A"
-    yield_str  = f"{fcf_yield*100:.1f}%"  if fcf_yield  is not None else "N/A"
-
-    result["detail"] = (
-        f"Owner Earnings {oe_str} | CAGR {cagr_str} | "
-        f"FCF Margin {margin_str} | FCF Yield {yield_str}"
-    )
     return result
