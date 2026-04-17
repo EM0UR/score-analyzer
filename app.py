@@ -637,6 +637,11 @@ with tab1:
             st.write("scorer.py:", inspect.getfile(scorer_mod))
             st.write("valuation.py:", inspect.getfile(valuation_mod))
             st.write("data_provider.py:", inspect.getfile(data_provider_mod))
+            st.write("### build tags")
+            st.write("SCORER_BUILD:", getattr(scorer_mod, "SCORER_BUILD", "missing"))
+            st.write("VALUATION_BUILD:", getattr(valuation_mod, "VALUATION_BUILD", "missing"))
+            st.write("DATA_PROVIDER_BUILD:", getattr(data_provider_mod, "DATA_PROVIDER_BUILD", "missing"))
+
 
             st.write({
                 "framework": audit.get("framework"),
