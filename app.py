@@ -1,4 +1,3 @@
-from data_provider import MultiSourceDataProvider
 import streamlit as st
 import sys, os, time, csv, io
 from datetime import datetime
@@ -209,7 +208,6 @@ def has_usable_payload(fetched):
     return False
 
 
-
 def render_fetch_debug(fetched, ticker):
     fetch_error = (fetched or {}).get("_fetch_error") if isinstance(fetched, dict) else None
     fetch_meta = (fetched or {}).get("_fetch_meta", {}) if isinstance(fetched, dict) else {}
@@ -314,11 +312,17 @@ def build_html_report(ticker, market, bd, info):
     if mos is None:
         mos = provider.get("margin_of_safety")
     pe = val.get("pe_ratio") or provider.get("pe_ratio")
+    css_cls = {"STRONG BUY":"strong-buy","BUY":"buy","WATCH":"watch","AVOID":"avoid"}.get(ve, "avoid")
 
+    q = get_audit_block(bd, "quality_block", 40)
+    c = get_audit_block(bd, "capital_block", 25)
+    r = get_audit_block(bd, "resilience_block", 20)
+    p = get_audit_block(bd, "price_block", 15)
+    audit = safe_get(bd, "audit") or {}
+    profile_label = audit.get("profile_label", "general")
     bear = val.get("intrinsic_value_dcf_bear") or provider.get("dcf_bear")
     base = val.get("intrinsic_value_dcf_base") or provider.get("dcf_base") or provider.get("dcf_intrinsic")
     bull = val.get("intrinsic_value_dcf_bull") or provider.get("dcf_bull")
-
 
     rows = ""
     for label, block in [("事業の質", q), ("資本配分", c), ("財務耐性", r), ("価格", p)]:
@@ -411,23 +415,22 @@ with tab1:
         cfg = MARKET_CONFIGS[market]
 
         with st.spinner(f"[{ticker}] データ取得・スコア計算中..."):
-    fetched = fetch_ticker_data(ticker)
+            fetched = fetch_ticker_data(ticker)
 
-    provider_error = None
-    try:
-        provider = get_provider()
-        provider_data = provider.get_metrics(ticker, market=market)
-        fetched = merge_provider_into_fetched(fetched, provider_data)
-    except Exception as e:
-        provider_error = f"{type(e).__name__}: {e}"
+            provider_error = None
+            try:
+                provider = get_provider()
+                provider_data = provider.get_metrics(ticker, market=market)
+                fetched = merge_provider_into_fetched(fetched, provider_data)
+            except Exception as e:
+                provider_error = f"{type(e).__name__}: {e}"
 
         if fetched is None:
             st.error(f"❌ [{ticker}] fetcher から None が返りました。fetcher.py の例外処理が未反映の可能性があります。")
             st.stop()
-            
-            if provider_error:
-                st.warning(f"⚠️ 外部フォールバック取得は一部失敗しました: {provider_error}")
 
+        if provider_error:
+            st.warning(f"⚠️ 外部フォールバック取得は一部失敗しました: {provider_error}")
 
         if not has_usable_payload(fetched):
             render_fetch_debug(fetched, ticker)
@@ -435,15 +438,28 @@ with tab1:
 
         info = fetched.get("info", {}) if isinstance(fetched, dict) else {}
         provider_flat = fetched.get("_provider", {}) if isinstance(fetched, dict) else {}
+        if fetched.get("_fetch_error"):
+            st.warning(f"⚠️ 部分取得で続行します: {fetched.get('_fetch_error')}")
+            with st.expander("取得診断ログを見る"):
+                st.json(fetched.get("_fetch_meta", {}))
+
+        try:
+            bd = run_all_modules(fetched, ticker, cfg)
+        except Exception as e:
+            st.error(f"❌ スコア計算エラー: {type(e).__name__}: {e}")
+            with st.expander("取得診断ログを見る", expanded=True):
+                st.json(fetched.get("_fetch_meta", {}))
+                st.write({"info_keys": len(info) if isinstance(info, dict) else 0})
+            st.stop()
 
         name = (
-        info.get("longName")
+            info.get("longName")
             or info.get("shortName")
             or provider_flat.get("company_name")
             or ticker
         )
         sector = (
-        info.get("sector")
+            info.get("sector")
             or info.get("industry")
             or provider_flat.get("sector")
             or provider_flat.get("industry")
@@ -531,7 +547,6 @@ with tab1:
         weighted = val_mod.get("intrinsic_value_dcf_weighted")
         if weighted is None:
             weighted = provider_flat.get("dcf_base") or provider_flat.get("dcf_intrinsic")
-
         oe_ps = val_mod.get("owner_earnings_per_share_used")
         oe_src = val_mod.get("owner_earnings_source")
         scen = val_mod.get("scenario_assumptions") or {}
@@ -588,7 +603,7 @@ with tab1:
                 if detail:
                     st.caption(detail)
             with rc:
-                st.markdown(f'<pstyle="color:{color};font-size:22px;font-weight:800;text-align:right;margin-top:8px">{s}<span style="font-size:13px;color:#888">/{max_m}</span></p>', unsafe_allow_html=True)
+                st.markdown(f'<p style="color:{color};font-size:22px;font-weight:800;text-align:right;margin-top:8px">{s}<span style="font-size:13px;color:#888">/{max_m}</span></p>', unsafe_allow_html=True)
             st.write("")
 
         st.divider()
@@ -607,12 +622,8 @@ with tab1:
                 st.write("### Data Provider Audit")
                 st.json(provider_audit)
 
-
         st.divider()
-        html_info = dict(info or {})
-        html_info["_provider_flat"] = provider_flat
-        html_data = build_html_report(ticker, market, bd, html_info)
-
+        html_data = build_html_report(ticker, market, bd, info)
         st.download_button(
             label="📥 HTMLレポートをダウンロード",
             data=html_data.encode("utf-8"),
@@ -660,23 +671,12 @@ with tab2:
             status.text(f"分析中 [{i+1}/{total_t}] {ticker} — {universe[ticker]}")
             try:
                 fetched = fetch_ticker_data(ticker)
-
-                try:
-                    provider = get_provider()
-                    provider_data = provider.get_metrics(ticker, market=sc_market)
-                    fetched = merge_provider_into_fetched(fetched, provider_data)
-                except Exception:
-                    pass
-
                 if not has_usable_payload(fetched):
                     prog_bar.progress((i + 1) / total_t)
                     time.sleep(0.1)
                     continue
-
                 bd = run_all_modules(fetched, ticker, cfg)
                 info = fetched.get("info", {}) if isinstance(fetched, dict) else {}
-                provider_flat = fetched.get("_provider", {}) if isinstance(fetched, dict) else {}
-
                 total = get_total(bd)
                 max_s = get_max_score(bd, sc_market)
                 pct = total / max_s * 100 if max_s else 0
