@@ -679,6 +679,14 @@ with tab2:
             status.text(f"分析中 [{i+1}/{total_t}] {ticker} — {universe[ticker]}")
             try:
                 fetched = fetch_ticker_data(ticker)
+
+                try:
+                    provider = get_provider()
+                    provider_data = provider.get_metrics(ticker, market=sc_market)
+                    fetched = merge_provider_into_fetched(fetched, provider_data)
+                except Exception:
+                    pass
+
                 if not has_usable_payload(fetched):
                     prog_bar.progress((i + 1) / total_t)
                     time.sleep(0.1)
