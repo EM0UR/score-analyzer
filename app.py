@@ -506,13 +506,35 @@ with tab1:
         st.divider()
 
         val_mod = safe_get(bd, "valuation") or {}
+
         iv = val_mod.get("intrinsic_value_dcf")
+        if iv is None:
+            iv = provider_flat.get("dcf_intrinsic")
+
         mos = val_mod.get("margin_of_safety_dcf")
+        if mos is None:
+            mos = provider_flat.get("margin_of_safety")
+
         pe = val_mod.get("pe_ratio")
+        if pe is None:
+            pe = provider_flat.get("pe_ratio")
+
         bear = val_mod.get("intrinsic_value_dcf_bear")
+        if bear is None:
+            bear = provider_flat.get("dcf_bear")
+
         base = val_mod.get("intrinsic_value_dcf_base")
+        if base is None:
+            base = provider_flat.get("dcf_base") or provider_flat.get("dcf_intrinsic")
+
         bull = val_mod.get("intrinsic_value_dcf_bull")
+        if bull is None:
+            bull = provider_flat.get("dcf_bull")
+
         weighted = val_mod.get("intrinsic_value_dcf_weighted")
+        if weighted is None:
+            weighted = provider_flat.get("dcf_base") or provider_flat.get("dcf_intrinsic")
+
         oe_ps = val_mod.get("owner_earnings_per_share_used")
         oe_src = val_mod.get("owner_earnings_source")
         scen = val_mod.get("scenario_assumptions") or {}
@@ -582,6 +604,12 @@ with tab1:
                 "legacy_total": audit.get("legacy_total"),
             })
             st.json(audit)
+
+            provider_audit = fetched.get("_provider_audit", {})
+            if provider_audit:
+                st.write("### Data Provider Audit")
+                st.json(provider_audit)
+
 
         st.divider()
         html_data = build_html_report(ticker, market, bd, info)
