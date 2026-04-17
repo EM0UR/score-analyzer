@@ -2,14 +2,6 @@ import math
 import pandas as pd
 
 
-# ============================================================
-# Buffett Score Analyzer v2.2 — Phase 3: 3-scenario valuation
-# - Backward compatible with current app.py and scorer.py
-# - Returns conservative DCF headline value plus bear/base/bull cases
-# - Uses owner earnings / FCF style cash generation when available
-# ============================================================
-
-
 def _to_float(x):
     try:
         if x is None or isinstance(x, bool):
@@ -124,6 +116,10 @@ def _derive_fcf_per_share(cashflow, info):
     if sh is None or sh <= 0:
         return None
 
+    info_fcf = _pick(info.get("freeCashflow"))
+    if info_fcf is not None and info_fcf > 0:
+        return info_fcf / sh
+
     op_cf = _series_value(cashflow, [
         "Operating Cash Flow",
         "Total Cash From Operating Activities",
@@ -142,7 +138,7 @@ def _derive_fcf_per_share(cashflow, info):
     else:
         fcf = op_cf - abs(capex)
 
-    if fcf is None:
+    if fcf is None or fcf <= 0:
         return None
     return fcf / sh
 
@@ -157,16 +153,19 @@ def _owner_earnings_per_share(oe, cashflow, info):
             "normalized_fcf_per_share",
         ]:
             v = _pick(oe.get(key))
-            if v is not None:
+            if v is not None and v > 0:
                 return v, key
+
     derived = _derive_fcf_per_share(cashflow, info)
-    if derived is not None:
+    if derived is not None and derived > 0:
         return derived, "derived_fcf_per_share"
+
     return None, None
 
 
 def _base_growth(info, oe):
     candidates = []
+
     if isinstance(oe, dict):
         for key in [
             "growth_rate",
@@ -185,10 +184,10 @@ def _base_growth(info, oe):
             candidates.append(v)
 
     if candidates:
-        # Use median-ish robust center: sorted middle
         arr = sorted(candidates)
-        g = arr[len(arr)//2]
+        g = arr[len(arr) // 2]
         return _clamp(g, 0.00, 0.16)
+
     return None
 
 
@@ -280,10 +279,21 @@ def _score_pe(pe, is_financial=False):
     return 0.5
 
 
+def _fmt(v):
+    return f"{v:.2f}" if v is not None else "—"
+
+
 def analyze_valuation(financials, cashflow, balance_sheet, info, oe, cfg):
     price = _price(info)
     pe_ratio = _pe(info, price)
     pb_ratio = _pb(info, price)
+
+    provider_intrinsic = _pick(info.get("providerDcfIntrinsic"))
+    provider_bear = _pick(info.get("providerDcfBear"))
+    provider_base = _pick(info.get("providerDcfBase"))
+    provider_bull = _pick(info.get("providerDcfBull"))
+    provider_mos = _pick(info.get("providerMarginOfSafety"))
+
     oe_ps, oe_source = _owner_earnings_per_share(oe, cashflow, info)
     scenarios = _scenario_assumptions(info, oe, cfg)
 
@@ -291,27 +301,38 @@ def analyze_valuation(financials, cashflow, balance_sheet, info, oe, cfg):
     base_val = _dcf_per_share(oe_ps, scenarios["base"]["growth"], scenarios["base"]["discount"], scenarios["base"]["terminal"])
     bull_val = _dcf_per_share(oe_ps, scenarios["bull"]["growth"], scenarios["bull"]["discount"], scenarios["bull"]["terminal"])
 
+    if bear_val is None:
+        bear_val = provider_bear
+    if base_val is None:
+        base_val = provider_base or provider_intrinsic
+    if bull_val is None:
+        bull_val = provider_bull
+
     scenario_values = [v for v in [bear_val, base_val, bull_val] if v is not None]
     conservative_value = None
     weighted_value = None
 
     if scenario_values:
         conservative_value = min(scenario_values)
+
         weights = []
         vals = []
-        for name, weight, val in [("bear", 0.50, bear_val), ("base", 0.35, base_val), ("bull", 0.15, bull_val)]:
+        for _, weight, val in [("bear", 0.50, bear_val), ("base", 0.35, base_val), ("bull", 0.15, bull_val)]:
             if val is not None:
                 weights.append(weight)
                 vals.append(val * weight)
         if weights:
             weighted_value = sum(vals) / sum(weights)
 
-    # Headline value is intentionally conservative for margin-of-safety discipline
     intrinsic_value_dcf = conservative_value if conservative_value is not None else weighted_value
+    if intrinsic_value_dcf is None:
+        intrinsic_value_dcf = provider_intrinsic
 
     margin_of_safety_dcf = None
     if price is not None and intrinsic_value_dcf is not None and intrinsic_value_dcf > 0:
         margin_of_safety_dcf = (intrinsic_value_dcf / price - 1.0) * 100.0
+    elif provider_mos is not None:
+        margin_of_safety_dcf = provider_mos
 
     is_fin = any(s in str(info.get("sector") or "").lower() for s in ["financial"]) or any(
         s in str(info.get("industry") or "").lower() for s in ["bank", "insurance"]
@@ -321,30 +342,27 @@ def analyze_valuation(financials, cashflow, balance_sheet, info, oe, cfg):
     score += _score_mos(margin_of_safety_dcf)
     score += _score_pe(pe_ratio, is_financial=is_fin)
 
-    # Slight bonus for a positive weighted/base relationship that is not wildly speculative
     if intrinsic_value_dcf is not None and weighted_value is not None:
         if weighted_value >= intrinsic_value_dcf * 1.10:
             score += 0.5
 
     score = max(0, min(10, score))
 
-    detail = (
-        f"DCF(bear/base/bull)="
-        f"{bear_val:.2f if bear_val is not None else 0}"
-    )
-
-    def _fmt(v):
-        return f"{v:.2f}" if v is not None else "—"
-
-    detail = (
-        f"DCF { _fmt(bear_val) } / { _fmt(base_val) } / { _fmt(bull_val) }"
-        f" | OEps={_fmt(oe_ps)} ({oe_source or 'n/a'})"
-        f" | PE={_fmt(pe_ratio)}"
-        f" | MoS={margin_of_safety_dcf:.1f}%" if margin_of_safety_dcf is not None else
-        f"DCF { _fmt(bear_val) } / { _fmt(base_val) } / { _fmt(bull_val) }"
-        f" | OEps={_fmt(oe_ps)} ({oe_source or 'n/a'})"
-        f" | PE={_fmt(pe_ratio)}"
-    )
+    if margin_of_safety_dcf is not None:
+        detail = (
+            f"DCF {_fmt(bear_val)} / {_fmt(base_val)} / {_fmt(bull_val)}"
+            f" | OEps={_fmt(oe_ps)} ({oe_source or 'n/a'})"
+            f" | PE={_fmt(pe_ratio)}"
+            f" | PB={_fmt(pb_ratio)}"
+            f" | MoS={margin_of_safety_dcf:.1f}%"
+        )
+    else:
+        detail = (
+            f"DCF {_fmt(bear_val)} / {_fmt(base_val)} / {_fmt(bull_val)}"
+            f" | OEps={_fmt(oe_ps)} ({oe_source or 'n/a'})"
+            f" | PE={_fmt(pe_ratio)}"
+            f" | PB={_fmt(pb_ratio)}"
+        )
 
     return {
         "score": score,
