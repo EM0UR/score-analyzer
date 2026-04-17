@@ -185,6 +185,31 @@ def build_compare_rows(results, sym):
     return rows
 
 
+def safe_csv_download(results, filename, label="📥 CSVダウンロード"):
+    if not results:
+        return
+    all_fields = []
+    seen = set()
+    for row in results:
+        for k in row.keys():
+            if k not in seen:
+                seen.add(k)
+                all_fields.append(k)
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=all_fields, extrasaction="ignore")
+    w.writeheader()
+    for row in results:
+        safe_row = {k: row.get(k) for k in all_fields}
+        w.writerow(safe_row)
+    st.download_button(
+        label=label,
+        data=buf.getvalue().encode("utf-8-sig"),
+        file_name=filename,
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+
 def build_html_report(ticker, market, bd, info):
     name = info.get("longName") or info.get("shortName") or ticker
     price = info.get("currentPrice") or info.get("previousClose")
@@ -584,22 +609,21 @@ with tab2:
             pr_s = f"P {r['price_score']:.1f}/15"
             c1, c2, c3, c4, c5, c6 = st.columns([0.4, 2.2, 1.9, 1.2, 1.1, 1.1])
             c1.markdown(f"**{rank}**")
-            c2.markdown(f"**{r['ticker']}** {r['name']}  \\n`{r['profile']}`")
-            c3.markdown(f'<span style="color:{color};font-weight:700">{r["verdict"]}</span> **{r["score"]}/{r["max"]}**  \\n<span style="font-size:12px;color:#94a3b8">{q_s} · {c_s} · {rr_s} · {pr_s}</span>', unsafe_allow_html=True)
-            c4.markdown(f"MoS: `{mos_s}`  \\nPE: `{pe_s}`")
+            c2.markdown(f"**{r['ticker']}** {r['name']}  
+`{r['profile']}`")
+            c3.markdown(
+                f'<span style="color:{color};font-weight:700">{r["verdict"]}</span> <strong>{r["score"]}/{r["max"]}</strong><br>'
+                f'<span style="font-size:12px;color:#94a3b8">{q_s} · {c_s} · {rr_s} · {pr_s}</span>',
+                unsafe_allow_html=True,
+            )
+            c4.markdown(f"MoS: `{mos_s}`  
+PE: `{pe_s}`")
             c5.markdown(f"ROE: `{roe_s}`")
             c6.markdown(f"{p_s}")
             st.divider()
 
-        if results:
-            buf = io.StringIO()
-            w = csv.DictWriter(buf, fieldnames=["ticker","name","sector","profile","score","max","pct","verdict","mos","roe","pe","price","quality_score","capital_score","resilience_score","price_score"])
-            w.writeheader()
-            w.writerows(results)
-            st.download_button(
-                label="📥 CSVダウンロード",
-                data=buf.getvalue().encode("utf-8-sig"),
-                file_name=f"screen_{sc_market.upper()}_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
+        safe_csv_download(
+            results,
+            f"screen_{sc_market.upper()}_{datetime.now().strftime('%Y%m%d')}.csv",
+            label="📥 CSVダウンロード",
+        )
