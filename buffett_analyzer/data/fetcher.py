@@ -54,20 +54,29 @@ def fetch_ticker_data(ticker, force_refresh=False):
     ticker = ticker.upper()
     path   = _cache_path(ticker)
 
+    # キャッシュ有効なら即返す
     if not force_refresh and _is_valid(path):
-        with open(path, "rb") as f:
-            return pickle.load(f)
+        try:
+            with open(path, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            # キャッシュが壊れていたら削除して再取得
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     print(f"[{ticker}] 取得中...", end="", flush=True)
     data = _safe_fetch(yf.Ticker(ticker))
 
-    if data:
+    if 
         with open(path, "wb") as f:
             pickle.dump(data, f)
         print(" ✓")
     else:
-        print(" ✗")
+        print(" ✗")  # ここで None を返す
     return data
+
 
 def clear_cache(ticker=None):
     if ticker:
