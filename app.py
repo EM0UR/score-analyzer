@@ -318,8 +318,8 @@ def safe_csv_download(results, filename, label="📥 CSVダウンロード"):
     )
 
 
-def build_html_report(ticker, market, bd, info):
-    provider = info.get("_provider_flat", {}) if isinstance(info, dict) else {}
+def build_html_report(ticker, market, bd, info, provider):
+    provider = provider or {}
     name = info.get("longName") or info.get("shortName") or provider.get("company_name") or ticker
     price = info.get("currentPrice") or info.get("previousClose") or provider.get("market_price")
     sym = "¥" if market == "jp" else "$"
