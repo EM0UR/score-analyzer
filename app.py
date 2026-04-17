@@ -628,6 +628,16 @@ with tab1:
 
         st.divider()
         with st.expander("🧾 監査ログ（プロ向け）"):
+            import inspect
+            import buffett_analyzer.scoring.scorer as scorer_mod
+            import buffett_analyzer.metrics.valuation as valuation_mod
+            import data_provider as data_provider_mod
+
+            st.write("### 実行中ファイル")
+            st.write("scorer.py:", inspect.getfile(scorer_mod))
+            st.write("valuation.py:", inspect.getfile(valuation_mod))
+            st.write("data_provider.py:", inspect.getfile(data_provider_mod))
+
             st.write({
                 "framework": audit.get("framework"),
                 "profile": audit.get("profile"),
