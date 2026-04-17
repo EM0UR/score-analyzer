@@ -414,36 +414,51 @@ with tab1:
         cfg = MARKET_CONFIGS[market]
 
         with st.spinner(f"[{ticker}] データ取得・スコア計算中..."):
-            fetched = fetch_ticker_data(ticker)
+    fetched = fetch_ticker_data(ticker)
+
+    provider_error = None
+    try:
+        provider = get_provider()
+        provider_data = provider.get_metrics(ticker, market=market)
+        fetched = merge_provider_into_fetched(fetched, provider_data)
+    except Exception as e:
+        provider_error = f"{type(e).__name__}: {e}"
 
         if fetched is None:
             st.error(f"❌ [{ticker}] fetcher から None が返りました。fetcher.py の例外処理が未反映の可能性があります。")
             st.stop()
+            
+            if provider_error:
+                st.warning(f"⚠️ 外部フォールバック取得は一部失敗しました: {provider_error}")
+
 
         if not has_usable_payload(fetched):
             render_fetch_debug(fetched, ticker)
             st.stop()
 
         info = fetched.get("info", {}) if isinstance(fetched, dict) else {}
-        if fetched.get("_fetch_error"):
-            st.warning(f"⚠️ 部分取得で続行します: {fetched.get('_fetch_error')}")
-            with st.expander("取得診断ログを見る"):
-                st.json(fetched.get("_fetch_meta", {}))
+        provider_flat = fetched.get("_provider", {}) if isinstance(fetched, dict) else {}
 
-        try:
-            bd = run_all_modules(fetched, ticker, cfg)
-        except Exception as e:
-            st.error(f"❌ スコア計算エラー: {type(e).__name__}: {e}")
-            with st.expander("取得診断ログを見る", expanded=True):
-                st.json(fetched.get("_fetch_meta", {}))
-                st.write({"info_keys": len(info) if isinstance(info, dict) else 0})
-            st.stop()
-
-        name = info.get("longName") or info.get("shortName") or ticker
-        sector = info.get("sector") or info.get("industry") or "—"
-        price = info.get("currentPrice") or info.get("previousClose")
+        name = (
+        info.get("longName")
+            or info.get("shortName")
+            or provider_flat.get("company_name")
+            or ticker
+        )
+        sector = (
+        info.get("sector")
+            or info.get("industry")
+            or provider_flat.get("sector")
+            or provider_flat.get("industry")
+            or "—"
+        )
+        price = (
+            info.get("currentPrice")
+            or info.get("previousClose")
+            or provider_flat.get("market_price")
+        )
         sym = cfg.currency_symbol
-        mc = info.get("marketCap")
+        mc = info.get("marketCap") or provider_flat.get("market_cap")
         audit = safe_get(bd, "audit") or {}
         profile = audit.get("profile", "general")
         profile_label = audit.get("profile_label", sector)
