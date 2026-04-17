@@ -112,7 +112,7 @@ def run_all_modules(data, ticker, market_config):
         q_bs = pd.DataFrame()
     if not isinstance(q_cf, pd.DataFrame):
         q_cf = pd.DataFrame()
-bd = ScoreBreakdown()
+    bd = ScoreBreakdown()
 
     # ── 各モジュール（失敗しても次へ進む）────────────────────────
     def _safe(fn, *args, **kwargs):
