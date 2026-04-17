@@ -5,16 +5,10 @@ import pandas as pd
 
 
 # ============================================================
-# Buffett Score Analyzer v2.0 — Phase 1: score redesign
-# Purpose:
-# - Keep existing module compatibility for app.py
-# - Redesign headline score into 4 Buffett-style blocks
-#   1) Business Quality   40
-#   2) Capital Allocation 25
-#   3) Financial Strength 20
-#   4) Price / MoS        15
-# - Avoid pandas truthiness errors
-# - Add audit data for professional review
+# Buffett Score Analyzer v2.1 — Phase 2: industry branching
+# - Keeps existing app.py compatibility
+# - Adds sector / industry routing for scoring
+# - Uses different quality / resilience / price emphasis by industry
 # ============================================================
 
 
@@ -45,9 +39,7 @@ def _ensure_df(obj):
 
 def _to_float(x):
     try:
-        if x is None:
-            return None
-        if isinstance(x, bool):
+        if x is None or isinstance(x, bool):
             return None
         v = float(x)
         if math.isnan(v) or math.isinf(v):
@@ -61,9 +53,7 @@ def _pct_to_unit(v):
     v = _to_float(v)
     if v is None:
         return None
-    if v > 1.5:
-        return v / 100.0
-    return v
+    return v / 100.0 if v > 1.5 else v
 
 
 def _norm(raw_score, raw_max):
@@ -83,82 +73,231 @@ def _score_bracket(v, brackets, default=0.5):
     return brackets[-1][1] if brackets else default
 
 
-def _score_margin_profile(info):
+def _text(info, *keys):
+    for k in keys:
+        v = info.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip().lower()
+    return ""
+
+
+# ----------------------------------------------------------------------
+# Industry routing
+# ----------------------------------------------------------------------
+def _industry_profile(info):
+    sector = _text(info, "sector")
+    industry = _text(info, "industry")
+    label = f"{sector} | {industry}".strip(" |")
+
+    bank_words = ["bank", "banks", "credit", "lending", "regional bank", "financial services"]
+    insurance_words = ["insurance", "reinsurance", "property & casualty", "life insurance"]
+    asset_light_words = ["software", "consumer electronics", "payments", "credit services", "internet", "media", "branded", "beverages", "household", "personal products"]
+    capital_intensive_words = ["airline", "aerospace", "auto", "automobile", "manufacturing", "industrial", "chemical", "telecom", "utility", "railroad", "energy", "semiconductor", "hardware", "steel", "shipping", "construction"]
+
+    joined = f"{sector} {industry}"
+
+    def has_any(words):
+        return any(w in joined for w in words)
+
+    if has_any(bank_words):
+        return "bank", label
+    if has_any(insurance_words):
+        return "insurance", label
+    if has_any(capital_intensive_words):
+        return "capital_intensive", label
+    if has_any(asset_light_words):
+        return "asset_light", label
+    return "general", label
+
+
+# ----------------------------------------------------------------------
+# Common feature scores
+# ----------------------------------------------------------------------
+def _score_margin_profile(info, profile="general"):
     gm = _pct_to_unit(info.get("grossMargins"))
     om = _pct_to_unit(info.get("operatingMargins"))
 
-    gm_score = _score_bracket(gm, [
-        (0.55, 1.00),
-        (0.40, 0.85),
-        (0.25, 0.55),
-        (0.10, 0.25),
-    ], default=0.50)
+    if profile == "asset_light":
+        gm_brackets = [(0.65, 1.00), (0.50, 0.88), (0.35, 0.65), (0.20, 0.35)]
+        om_brackets = [(0.28, 1.00), (0.20, 0.85), (0.12, 0.60), (0.06, 0.35)]
+    elif profile == "capital_intensive":
+        gm_brackets = [(0.40, 1.00), (0.28, 0.82), (0.18, 0.58), (0.08, 0.30)]
+        om_brackets = [(0.18, 1.00), (0.12, 0.82), (0.08, 0.60), (0.04, 0.35)]
+    else:
+        gm_brackets = [(0.55, 1.00), (0.40, 0.85), (0.25, 0.55), (0.10, 0.25)]
+        om_brackets = [(0.25, 1.00), (0.18, 0.82), (0.10, 0.55), (0.05, 0.30)]
 
-    om_score = _score_bracket(om, [
-        (0.25, 1.00),
-        (0.18, 0.82),
-        (0.10, 0.55),
-        (0.05, 0.30),
-    ], default=0.50)
-
+    gm_score = _score_bracket(gm, gm_brackets, default=0.50)
+    om_score = _score_bracket(om, om_brackets, default=0.50)
     return (gm_score + om_score) / 2.0, gm, om
 
 
-def _score_balance_overlay(info, health_mod):
-    de = info.get("debtToEquity")
-    de = _to_float(de)
+def _score_de(info, profile="general"):
+    de = _to_float(info.get("debtToEquity"))
     if de is not None and de > 3:
         de = de / 100.0
 
+    if de is None:
+        return 0.50, None
+
+    if profile == "capital_intensive":
+        if de <= 0.60: return 1.00, de
+        if de <= 1.00: return 0.80, de
+        if de <= 1.80: return 0.55, de
+        if de <= 2.50: return 0.30, de
+        return 0.10, de
+
+    if de <= 0.30: return 1.00, de
+    if de <= 0.60: return 0.80, de
+    if de <= 1.00: return 0.55, de
+    if de <= 2.00: return 0.30, de
+    return 0.10, de
+
+
+def _score_current_ratio(info, profile="general"):
     cr = _to_float(info.get("currentRatio"))
+    if cr is None:
+        return 0.50, None
 
-    de_score = 0.50
-    if de is not None:
-        if de <= 0.30:
-            de_score = 1.00
-        elif de <= 0.60:
-            de_score = 0.80
-        elif de <= 1.00:
-            de_score = 0.55
-        elif de <= 2.00:
-            de_score = 0.30
-        else:
-            de_score = 0.10
+    if profile == "bank":
+        return 0.50, cr
+    if profile == "insurance":
+        if cr >= 1.2: return 0.75, cr
+        if cr >= 1.0: return 0.60, cr
+        return 0.40, cr
 
-    cr_score = 0.50
-    if cr is not None:
-        if cr >= 2.0:
-            cr_score = 1.00
-        elif cr >= 1.5:
-            cr_score = 0.80
-        elif cr >= 1.0:
-            cr_score = 0.55
-        else:
-            cr_score = 0.20
+    if cr >= 2.0: return 1.00, cr
+    if cr >= 1.5: return 0.80, cr
+    if cr >= 1.0: return 0.55, cr
+    return 0.20, cr
 
-    health_norm = _norm(health_mod.get("score", 0), health_mod.get("max_score", 15))
-    overlay = 0.65 * health_norm + 0.20 * de_score + 0.15 * cr_score
-    return overlay, de, cr
+
+def _score_roe_profile(info, profile="general"):
+    roe = _pct_to_unit(info.get("returnOnEquity"))
+    if roe is None:
+        return 0.50, None
+
+    if profile == "bank":
+        if roe >= 0.16: return 1.00, roe
+        if roe >= 0.12: return 0.82, roe
+        if roe >= 0.09: return 0.60, roe
+        if roe >= 0.06: return 0.35, roe
+        return 0.15, roe
+
+    if profile == "insurance":
+        if roe >= 0.14: return 1.00, roe
+        if roe >= 0.10: return 0.82, roe
+        if roe >= 0.08: return 0.60, roe
+        if roe >= 0.05: return 0.35, roe
+        return 0.15, roe
+
+    if profile == "capital_intensive":
+        if roe >= 0.18: return 1.00, roe
+        if roe >= 0.13: return 0.82, roe
+        if roe >= 0.09: return 0.60, roe
+        if roe >= 0.06: return 0.35, roe
+        return 0.15, roe
+
+    if roe >= 0.20: return 1.00, roe
+    if roe >= 0.15: return 0.85, roe
+    if roe >= 0.10: return 0.60, roe
+    if roe >= 0.06: return 0.35, roe
+    return 0.15, roe
+
+
+def _score_roa_profile(info, profile="general"):
+    roa = _pct_to_unit(info.get("returnOnAssets"))
+    if roa is None:
+        return 0.50, None
+
+    if profile == "bank":
+        if roa >= 0.015: return 1.00, roa
+        if roa >= 0.010: return 0.80, roa
+        if roa >= 0.006: return 0.55, roa
+        return 0.25, roa
+
+    if profile == "insurance":
+        if roa >= 0.040: return 1.00, roa
+        if roa >= 0.025: return 0.80, roa
+        if roa >= 0.015: return 0.55, roa
+        return 0.25, roa
+
+    if roa >= 0.10: return 1.00, roa
+    if roa >= 0.06: return 0.80, roa
+    if roa >= 0.03: return 0.55, roa
+    return 0.25, roa
+
+
+def _score_cash_liquidity(info):
+    cash = _to_float(info.get("totalCash"))
+    debt = _to_float(info.get("totalDebt"))
+    if cash is None or debt is None or debt <= 0:
+        return 0.50, cash, debt
+    ratio = cash / debt
+    if ratio >= 1.00: return 1.00, cash, debt
+    if ratio >= 0.60: return 0.80, cash, debt
+    if ratio >= 0.30: return 0.55, cash, debt
+    return 0.25, cash, debt
+
+
+def _score_pe_profile(info, profile="general"):
+    pe = _to_float(info.get("trailingPE") or info.get("forwardPE"))
+    if pe is None or pe <= 0:
+        return 0.50, None
+
+    if profile in ("bank", "insurance"):
+        if pe <= 10: return 1.00, pe
+        if pe <= 13: return 0.82, pe
+        if pe <= 17: return 0.58, pe
+        if pe <= 22: return 0.35, pe
+        return 0.15, pe
+
+    if profile == "asset_light":
+        if pe <= 18: return 1.00, pe
+        if pe <= 24: return 0.80, pe
+        if pe <= 32: return 0.58, pe
+        if pe <= 40: return 0.35, pe
+        return 0.18, pe
+
+    if pe <= 14: return 1.00, pe
+    if pe <= 20: return 0.80, pe
+    if pe <= 28: return 0.58, pe
+    if pe <= 35: return 0.35, pe
+    return 0.18, pe
+
+
+def _score_pb_profile(info, profile="general"):
+    pb = _to_float(info.get("priceToBook"))
+    if pb is None or pb <= 0:
+        return 0.50, None
+
+    if profile == "bank":
+        if pb <= 1.0: return 1.00, pb
+        if pb <= 1.3: return 0.82, pb
+        if pb <= 1.8: return 0.58, pb
+        if pb <= 2.3: return 0.35, pb
+        return 0.15, pb
+
+    if profile == "insurance":
+        if pb <= 1.2: return 1.00, pb
+        if pb <= 1.6: return 0.82, pb
+        if pb <= 2.1: return 0.58, pb
+        if pb <= 2.7: return 0.35, pb
+        return 0.15, pb
+
+    return 0.50, pb
 
 
 def _score_mos_overlay(valuation_mod):
     mos = _to_float(valuation_mod.get("margin_of_safety_dcf"))
     if mos is None:
         return 0.45, None
-
-    if mos >= 40:
-        s = 1.00
-    elif mos >= 25:
-        s = 0.85
-    elif mos >= 15:
-        s = 0.70
-    elif mos >= 5:
-        s = 0.55
-    elif mos >= -10:
-        s = 0.35
-    else:
-        s = 0.10
-    return s, mos
+    if mos >= 40: return 1.00, mos
+    if mos >= 25: return 0.85, mos
+    if mos >= 15: return 0.70, mos
+    if mos >= 5: return 0.55, mos
+    if mos >= -10: return 0.35, mos
+    return 0.10, mos
 
 
 def _fallback_health(financials, balance_sheet, cashflow, info, cfg, **kwargs):
@@ -212,11 +351,10 @@ class ScoreBreakdown:
     management: dict = field(default_factory=dict)
     jp_fundamentals: dict = field(default_factory=dict)
 
-    # New professional blocks
-    quality_block: dict = field(default_factory=dict)       # max 40
-    capital_block: dict = field(default_factory=dict)       # max 25
-    resilience_block: dict = field(default_factory=dict)    # max 20
-    price_block: dict = field(default_factory=dict)         # max 15
+    quality_block: dict = field(default_factory=dict)
+    capital_block: dict = field(default_factory=dict)
+    resilience_block: dict = field(default_factory=dict)
+    price_block: dict = field(default_factory=dict)
     audit: dict = field(default_factory=dict)
 
     @property
@@ -248,7 +386,6 @@ class ScoreBreakdown:
     @property
     def verdict_en(self):
         pct = self.total / self.max_score * 100
-
         if pct >= 82:
             verdict = "STRONG BUY"
         elif pct >= 65:
@@ -258,10 +395,10 @@ class ScoreBreakdown:
         else:
             verdict = "AVOID"
 
-        # Buffett-style quality gate: low quality cannot become high conviction
         q = self.quality_block.get("score", 0)
         r = self.resilience_block.get("score", 0)
         p = self.price_block.get("score", 0)
+        profile = (self.audit or {}).get("profile")
 
         if q < 18:
             verdict = "AVOID"
@@ -271,6 +408,9 @@ class ScoreBreakdown:
             verdict = "WATCH"
         elif p < 4 and verdict == "STRONG BUY":
             verdict = "BUY"
+
+        if profile in ("bank", "insurance") and r < 10 and verdict in ("STRONG BUY", "BUY"):
+            verdict = "WATCH"
 
         return verdict
 
@@ -290,8 +430,10 @@ class ScoreBreakdown:
         c = self.capital_block.get("score", 0)
         r = self.resilience_block.get("score", 0)
         p = self.price_block.get("score", 0)
+        profile = (self.audit or {}).get("profile_label", "general")
 
         parts = [
+            f"業種プロファイル {profile}",
             f"事業の質 {q:.0f}/40",
             f"資本配分 {c:.0f}/25",
             f"財務耐性 {r:.0f}/20",
@@ -312,45 +454,90 @@ class ScoreBreakdown:
         return prefix + " / " + " | ".join(parts)
 
 
-
-def _build_quality_block(bd, info):
+# ----------------------------------------------------------------------
+# Profile-specific blocks
+# ----------------------------------------------------------------------
+def _build_quality_block(bd, info, profile):
     earnings_norm = _norm(bd.earnings.get("score", 0), bd.earnings.get("max_score", 20))
     moat_norm = _norm(bd.moat.get("score", 0), bd.moat.get("max_score", 15))
-    margin_norm, gm, om = _score_margin_profile(info)
+    margin_norm, gm, om = _score_margin_profile(info, profile)
+    roe_norm, roe = _score_roe_profile(info, profile)
+    roa_norm, roa = _score_roa_profile(info, profile)
 
-    raw = 0.45 * earnings_norm + 0.35 * moat_norm + 0.20 * margin_norm
+    if profile == "bank":
+        raw = 0.25 * earnings_norm + 0.15 * moat_norm + 0.35 * roe_norm + 0.25 * roa_norm
+    elif profile == "insurance":
+        raw = 0.25 * earnings_norm + 0.20 * moat_norm + 0.25 * roe_norm + 0.30 * roa_norm
+    elif profile == "asset_light":
+        raw = 0.30 * earnings_norm + 0.30 * moat_norm + 0.25 * margin_norm + 0.15 * roe_norm
+    elif profile == "capital_intensive":
+        raw = 0.30 * earnings_norm + 0.20 * moat_norm + 0.20 * margin_norm + 0.30 * roe_norm
+    else:
+        raw = 0.35 * earnings_norm + 0.30 * moat_norm + 0.20 * margin_norm + 0.15 * roe_norm
+
     score = round(raw * 40, 1)
-    detail = f"earn={earnings_norm:.2f}, moat={moat_norm:.2f}, margin={margin_norm:.2f}, gross={gm}, op={om}"
+    detail = f"profile={profile}, earn={earnings_norm:.2f}, moat={moat_norm:.2f}, margin={margin_norm:.2f}, roe={roe}, roa={roa}, gross={gm}, op={om}"
     return {"score": score, "max_score": 40, "detail": detail}
 
 
-
-def _build_capital_block(bd):
+def _build_capital_block(bd, info, profile):
     capital_norm = _norm(bd.capital.get("score", 0), bd.capital.get("max_score", 20))
     oe_norm = _norm(bd.oe.get("score", 0), bd.oe.get("max_score", 20))
     mgmt_norm = _norm(bd.management.get("score", 0), bd.management.get("max_score", 10))
+    roe_norm, roe = _score_roe_profile(info, profile)
 
-    raw = 0.45 * capital_norm + 0.35 * oe_norm + 0.20 * mgmt_norm
+    if profile == "bank":
+        raw = 0.25 * capital_norm + 0.20 * oe_norm + 0.25 * mgmt_norm + 0.30 * roe_norm
+    elif profile == "insurance":
+        raw = 0.20 * capital_norm + 0.20 * oe_norm + 0.25 * mgmt_norm + 0.35 * roe_norm
+    elif profile == "capital_intensive":
+        raw = 0.35 * capital_norm + 0.25 * oe_norm + 0.20 * mgmt_norm + 0.20 * roe_norm
+    else:
+        raw = 0.40 * capital_norm + 0.30 * oe_norm + 0.20 * mgmt_norm + 0.10 * roe_norm
+
     score = round(raw * 25, 1)
-    detail = f"capital={capital_norm:.2f}, oe={oe_norm:.2f}, mgmt={mgmt_norm:.2f}"
+    detail = f"profile={profile}, capital={capital_norm:.2f}, oe={oe_norm:.2f}, mgmt={mgmt_norm:.2f}, roe={roe}"
     return {"score": score, "max_score": 25, "detail": detail}
 
 
+def _build_resilience_block(bd, info, profile):
+    health_norm = _norm(bd.health.get("score", 0), bd.health.get("max_score", 15))
+    de_score, de = _score_de(info, profile)
+    cr_score, cr = _score_current_ratio(info, profile)
+    cash_score, cash, debt = _score_cash_liquidity(info)
+    roa_norm, roa = _score_roa_profile(info, profile)
 
-def _build_resilience_block(bd, info):
-    overlay, de, cr = _score_balance_overlay(info, bd.health)
-    score = round(overlay * 20, 1)
-    detail = f"health={_norm(bd.health.get('score', 0), bd.health.get('max_score', 15)):.2f}, de={de}, cr={cr}"
+    if profile == "bank":
+        raw = 0.35 * health_norm + 0.35 * roa_norm + 0.15 * cash_score + 0.15 * cr_score
+    elif profile == "insurance":
+        raw = 0.35 * health_norm + 0.30 * roa_norm + 0.20 * cash_score + 0.15 * cr_score
+    elif profile == "capital_intensive":
+        raw = 0.45 * health_norm + 0.25 * de_score + 0.15 * cr_score + 0.15 * cash_score
+    else:
+        raw = 0.45 * health_norm + 0.25 * de_score + 0.15 * cr_score + 0.15 * cash_score
+
+    score = round(raw * 20, 1)
+    detail = f"profile={profile}, health={health_norm:.2f}, de={de}, cr={cr}, cash={cash}, debt={debt}, roa={roa}"
     return {"score": score, "max_score": 20, "detail": detail}
 
 
-
-def _build_price_block(bd):
+def _build_price_block(bd, info, profile):
     valuation_norm = _norm(bd.valuation.get("score", 0), bd.valuation.get("max_score", 10))
     mos_norm, mos = _score_mos_overlay(bd.valuation)
-    raw = 0.65 * valuation_norm + 0.35 * mos_norm
+    pe_norm, pe = _score_pe_profile(info, profile)
+    pb_norm, pb = _score_pb_profile(info, profile)
+
+    if profile == "bank":
+        raw = 0.30 * valuation_norm + 0.25 * mos_norm + 0.20 * pe_norm + 0.25 * pb_norm
+    elif profile == "insurance":
+        raw = 0.35 * valuation_norm + 0.25 * mos_norm + 0.20 * pe_norm + 0.20 * pb_norm
+    elif profile == "asset_light":
+        raw = 0.55 * valuation_norm + 0.25 * mos_norm + 0.20 * pe_norm
+    else:
+        raw = 0.55 * valuation_norm + 0.30 * mos_norm + 0.15 * pe_norm
+
     score = round(raw * 15, 1)
-    detail = f"valuation={valuation_norm:.2f}, mos={mos}, mos_norm={mos_norm:.2f}"
+    detail = f"profile={profile}, valuation={valuation_norm:.2f}, mos={mos}, pe={pe}, pb={pb}"
     return {"score": score, "max_score": 15, "detail": detail}
 
 
@@ -368,7 +555,6 @@ def run_all_modules(data, ticker, market_config):
 
     bd = ScoreBreakdown()
 
-    # Legacy modules ---------------------------------------------------------
     fn, err = _safe_import("buffett_analyzer.metrics.earnings", "analyze_earnings")
     bd.earnings = _safe_call(fn, 20, fin, info) if fn else {"score": 0, "max_score": 20, "detail": f"import失敗: {err}"}
 
@@ -400,15 +586,17 @@ def run_all_modules(data, ticker, market_config):
     else:
         bd.jp_fundamentals = {"score": 0, "max_score": 0, "detail": f"import失敗: {err}"}
 
-    # New headline score blocks ---------------------------------------------
-    bd.quality_block = _build_quality_block(bd, info)
-    bd.capital_block = _build_capital_block(bd)
-    bd.resilience_block = _build_resilience_block(bd, info)
-    bd.price_block = _build_price_block(bd)
+    profile, profile_label = _industry_profile(info)
+    bd.quality_block = _build_quality_block(bd, info, profile)
+    bd.capital_block = _build_capital_block(bd, info, profile)
+    bd.resilience_block = _build_resilience_block(bd, info, profile)
+    bd.price_block = _build_price_block(bd, info, profile)
 
     bd.audit = {
         "ticker": ticker,
-        "framework": "Buffett 4-block v2.0",
+        "framework": "Buffett 4-block v2.1 industry",
+        "profile": profile,
+        "profile_label": profile_label,
         "legacy_total": bd.legacy_total,
         "headline_total": bd.total,
         "quality_block": bd.quality_block,
@@ -417,8 +605,8 @@ def run_all_modules(data, ticker, market_config):
         "price_block": bd.price_block,
     }
 
-    # Professional annotation in legacy module details for debugging
     bd.management["headline_detail"] = (
+        f"profile={profile} | "
         f"Q={bd.quality_block.get('score', 0):.1f}/40 | "
         f"C={bd.capital_block.get('score', 0):.1f}/25 | "
         f"R={bd.resilience_block.get('score', 0):.1f}/20 | "
