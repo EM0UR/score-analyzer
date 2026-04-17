@@ -636,6 +636,12 @@ with tab1:
                 "legacy_total": audit.get("legacy_total"),
             })
             st.json(audit)
+            
+            st.write("### valuation raw")
+            st.json(safe_get(bd, "valuation") or {})
+
+            st.write("### provider flat")
+            st.json(provider_flat)
 
             provider_audit = fetched.get("_provider_audit", {})
             if provider_audit:
