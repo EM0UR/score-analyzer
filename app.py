@@ -632,6 +632,32 @@ with tab1:
             import buffett_analyzer.scoring.scorer as scorer_mod
             import buffett_analyzer.metrics.valuation as valuation_mod
             import data_provider as data_provider_mod
+            from pathlib import Path
+
+            st.write("### valuation.py first 20 lines")
+            valuation_path = Path("/mount/src/score-analyzer/buffett_analyzer/metrics/valuation.py")
+            try:
+                txt = valuation_path.read_text(encoding="utf-8")
+                st.code("\n".join(txt.splitlines()[:20]), language="python")
+            except Exception as e:
+                st.write(f"read error: {e}")
+
+            st.write("### scorer.py first 20 lines")
+            scorer_path = Path("/mount/src/score-analyzer/buffett_analyzer/scoring/scorer.py")
+            try:
+                txt2 = scorer_path.read_text(encoding="utf-8")
+                st.code("\n".join(txt2.splitlines()[:20]), language="python")
+            except Exception as e:
+                st.write(f"read error: {e}")
+
+            st.write("### data_provider.py first 20 lines")
+            provider_path = Path("/mount/src/score-analyzer/data_provider.py")
+            try:
+                txt3 = provider_path.read_text(encoding="utf-8")
+                st.code("\n".join(txt3.splitlines()[:20]), language="python")
+            except Exception as e:
+                st.write(f"read error: {e}")
+
 
             st.write("### 実行中ファイル")
             st.write("scorer.py:", inspect.getfile(scorer_mod))
