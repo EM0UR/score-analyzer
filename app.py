@@ -7,6 +7,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from buffett_analyzer.data.fetcher import fetch_ticker_data
 from buffett_analyzer.scoring.scorer import run_all_modules
 from buffett_analyzer.config import MARKET_CONFIGS
+try:
+    from data_provider import MultiSourceDataProvider
+    _provider_import_error = None
+except Exception as _e:
+    MultiSourceDataProvider = None
+    _provider_import_error = f"{type(_e).__name__}: {_e}"
 
 st.set_page_config(page_title="Buffett Score Analyzer", page_icon="📊", layout="centered")
 
@@ -24,6 +30,8 @@ st.markdown("""
 
 @st.cache_resource
 def get_provider():
+    if MultiSourceDataProvider is None:
+        raise RuntimeError(_provider_import_error or "data_provider import failed")
     return MultiSourceDataProvider()
 
 
