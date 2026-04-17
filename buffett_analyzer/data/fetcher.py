@@ -77,7 +77,6 @@ def fetch_ticker_data(ticker, force_refresh=False):
         print(" ✗")  # ここで None を返す
     return data
 
-
 def clear_cache(ticker=None):
     if ticker:
         path = _cache_path(ticker)
