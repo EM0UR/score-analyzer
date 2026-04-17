@@ -93,25 +93,25 @@ class ScoreBreakdown:
 def run_all_modules(data, ticker, market_config):
     cfg  = market_config
     info = data.get("info", {})
-        fin  = data.get("financials")
-bs   = data.get("balance_sheet")
-cf   = data.get("cashflow")
-q_fin = data.get("q_financials")
-q_bs  = data.get("q_balance_sheet")
-q_cf  = data.get("q_cashflow")
-
-if not isinstance(fin, pd.DataFrame):
-    fin = pd.DataFrame()
-if not isinstance(bs, pd.DataFrame):
-    bs = pd.DataFrame()
-if not isinstance(cf, pd.DataFrame):
-    cf = pd.DataFrame()
-if not isinstance(q_fin, pd.DataFrame):
-    q_fin = pd.DataFrame()
-if not isinstance(q_bs, pd.DataFrame):
-    q_bs = pd.DataFrame()
-if not isinstance(q_cf, pd.DataFrame):
-    q_cf = pd.DataFrame()
+    fin  = data.get("financials")
+    bs   = data.get("balance_sheet")
+    cf   = data.get("cashflow")
+    q_fin = data.get("q_financials")
+    q_bs  = data.get("q_balance_sheet")
+    q_cf  = data.get("q_cashflow")
+    
+    if not isinstance(fin, pd.DataFrame):
+        fin = pd.DataFrame()
+    if not isinstance(bs, pd.DataFrame):
+        bs = pd.DataFrame()
+    if not isinstance(cf, pd.DataFrame):
+        cf = pd.DataFrame()
+    if not isinstance(q_fin, pd.DataFrame):
+        q_fin = pd.DataFrame()
+    if not isinstance(q_bs, pd.DataFrame):
+        q_bs = pd.DataFrame()
+    if not isinstance(q_cf, pd.DataFrame):
+        q_cf = pd.DataFrame()
 bd = ScoreBreakdown()
 
     # ── 各モジュール（失敗しても次へ進む）────────────────────────
