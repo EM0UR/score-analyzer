@@ -609,15 +609,13 @@ with tab2:
             pr_s = f"P {r['price_score']:.1f}/15"
             c1, c2, c3, c4, c5, c6 = st.columns([0.4, 2.2, 1.9, 1.2, 1.1, 1.1])
             c1.markdown(f"**{rank}**")
-            c2.markdown(f"**{r['ticker']}** {r['name']}  
-`{r['profile']}`")
+            c2.markdown(f"**{r['ticker']}** {r['name']}  \\n`{r['profile']}`")
             c3.markdown(
                 f'<span style="color:{color};font-weight:700">{r["verdict"]}</span> <strong>{r["score"]}/{r["max"]}</strong><br>'
                 f'<span style="font-size:12px;color:#94a3b8">{q_s} · {c_s} · {rr_s} · {pr_s}</span>',
                 unsafe_allow_html=True,
             )
-            c4.markdown(f"MoS: `{mos_s}`  
-PE: `{pe_s}`")
+            c4.markdown(f"MoS: `{mos_s}`  \\nPE: `{pe_s}`")
             c5.markdown(f"ROE: `{roe_s}`")
             c6.markdown(f"{p_s}")
             st.divider()
