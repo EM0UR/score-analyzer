@@ -19,33 +19,35 @@ def _is_valid(path):
     return age < timedelta(hours=CACHE_TTL_HOURS)
 
 def _safe_fetch(yft, retry=0):
+    """yfinance.Ticker から素早くデータを取得する。
+    info が変でも、とりあえず data を返す方針にする。
+    """
     try:
-        time.sleep(REQUEST_DELAY)
-        data = {
-            # ── 年次（最大10年分・長期トレンド分析用）──────────────
-            "info":          yft.info,
-            "financials":    yft.financials,           # 年次 損益計算書
-            "balance_sheet": yft.balance_sheet,        # 年次 貸借対照表
-            "cashflow":      yft.cashflow,              # 年次 キャッシュフロー
-            "history":       yft.history(period="10y"),
+        # 軽いレート制御
+        time.sleep(0.8)
 
-            # ── 四半期（直近4Q・最新業績反映用）──────────────────
+        data = {
+            "info":            yft.info,
+            "financials":      yft.financials,
+            "balance_sheet":   yft.balance_sheet,
+            "cashflow":        yft.cashflow,
+            "history":         yft.history(period="10y"),
             "q_financials":    yft.quarterly_financials,
             "q_balance_sheet": yft.quarterly_balance_sheet,
             "q_cashflow":      yft.quarterly_cashflow,
         }
-        info = data["info"]
-        if not info or (info.get("currentPrice") is None and info.get("previousClose") is None):
-            raise ValueError("価格データなし")
+
+        info = data.get("info") or {}
+        # 価格だけは最低限確認するが、取れなかったら None を返すだけでリトライしない
+        price = info.get("currentPrice") or info.get("previousClose")
+        if price is None:
+            logger.warning("価格データなし: %s", yft.ticker)
+            return None
+
         return data
 
     except Exception as e:
-        if retry < MAX_RETRIES:
-            wait = REQUEST_DELAY * (BACKOFF_FACTOR ** (retry + 1))
-            logger.warning(f"リトライ {retry+1}/{MAX_RETRIES} ({e}), {wait:.1f}秒後...")
-            time.sleep(wait)
-            return _safe_fetch(yft, retry + 1)
-        logger.error(f"データ取得失敗: {e}")
+        logger.error("yfinance 取得失敗 (%s): %s", yft.ticker, e)
         return None
 
 def fetch_ticker_data(ticker, force_refresh=False):
