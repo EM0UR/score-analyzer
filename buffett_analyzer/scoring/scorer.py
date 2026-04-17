@@ -1,3 +1,4 @@
+SCORER_BUILD = "scorer-20260417-2200-phase6"
 from dataclasses import dataclass, field
 import importlib
 import math
