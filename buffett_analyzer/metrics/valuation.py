@@ -1,150 +1,366 @@
-# metrics/valuation.py — DCF 本質的価値 / PER / Margin of Safety
-import numpy as np
+import math
 import pandas as pd
-from typing import Dict, Optional
 
 
-def _safe_row(df: pd.DataFrame, *keys):
-    for k in keys:
-        if k in df.index:
-            return df.loc[k]
+# ============================================================
+# Buffett Score Analyzer v2.2 — Phase 3: 3-scenario valuation
+# - Backward compatible with current app.py and scorer.py
+# - Returns conservative DCF headline value plus bear/base/bull cases
+# - Uses owner earnings / FCF style cash generation when available
+# ============================================================
+
+
+def _to_float(x):
+    try:
+        if x is None or isinstance(x, bool):
+            return None
+        v = float(x)
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return v
+    except Exception:
+        return None
+
+
+def _pct_to_unit(v):
+    v = _to_float(v)
+    if v is None:
+        return None
+    return v / 100.0 if v > 1.5 else v
+
+
+def _clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def _pick(*values):
+    for v in values:
+        fv = _to_float(v)
+        if fv is not None:
+            return fv
     return None
 
 
-def _two_stage_dcf(
-    last_oe: float,
-    growth_high: float,
-    growth_low: float,
-    years_high: int,
-    discount_rate: float,
-    terminal_growth: float,
-) -> float:
-    """
-    2ステージ DCF：最初 years_high 年は growth_high、その後は growth_low で成長し、
-    最終的に terminal_growth で永続。
-    """
-    oe = last_oe
+def _cfg_value(cfg, *names, default=None):
+    for name in names:
+        if hasattr(cfg, name):
+            v = _to_float(getattr(cfg, name))
+            if v is not None:
+                return v
+    return default
+
+
+def _is_jp(info, cfg):
+    c = str(info.get("currency") or "").upper()
+    if c == "JPY":
+        return True
+    if hasattr(cfg, "currency_symbol") and getattr(cfg, "currency_symbol") == "¥":
+        return True
+    return False
+
+
+def _price(info):
+    return _pick(info.get("currentPrice"), info.get("previousClose"), info.get("regularMarketPrice"))
+
+
+def _eps(info):
+    return _pick(info.get("trailingEps"), info.get("forwardEps"))
+
+
+def _pe(info, price=None):
+    price = _pick(price, _price(info))
+    pe = _pick(info.get("trailingPE"), info.get("forwardPE"))
+    if pe is not None and pe > 0:
+        return pe
+    eps = _eps(info)
+    if price is not None and eps is not None and eps > 0:
+        return price / eps
+    return None
+
+
+def _book_value_ps(info):
+    return _pick(info.get("bookValue"))
+
+
+def _pb(info, price=None):
+    price = _pick(price, _price(info))
+    pb = _pick(info.get("priceToBook"))
+    if pb is not None and pb > 0:
+        return pb
+    bvps = _book_value_ps(info)
+    if price is not None and bvps is not None and bvps > 0:
+        return price / bvps
+    return None
+
+
+def _shares(info, financials=None):
+    sh = _pick(info.get("sharesOutstanding"), info.get("impliedSharesOutstanding"))
+    if sh is not None and sh > 0:
+        return sh
+    return None
+
+
+def _series_value(df, labels):
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return None
+    for label in labels:
+        if label in df.index:
+            row = df.loc[label]
+            if isinstance(row, pd.Series):
+                vals = row.dropna().tolist()
+                for v in vals:
+                    fv = _to_float(v)
+                    if fv is not None:
+                        return fv
+            else:
+                fv = _to_float(row)
+                if fv is not None:
+                    return fv
+    return None
+
+
+def _derive_fcf_per_share(cashflow, info):
+    sh = _shares(info)
+    if sh is None or sh <= 0:
+        return None
+
+    op_cf = _series_value(cashflow, [
+        "Operating Cash Flow",
+        "Total Cash From Operating Activities",
+        "Cash Flow From Continuing Operating Activities",
+    ])
+    capex = _series_value(cashflow, [
+        "Capital Expenditure",
+        "Capital Expenditures",
+    ])
+
+    if op_cf is None:
+        return None
+
+    if capex is None:
+        fcf = op_cf
+    else:
+        fcf = op_cf - abs(capex)
+
+    if fcf is None:
+        return None
+    return fcf / sh
+
+
+def _owner_earnings_per_share(oe, cashflow, info):
+    if isinstance(oe, dict):
+        for key in [
+            "owner_earnings_per_share",
+            "oe_per_share",
+            "fcf_per_share",
+            "normalized_oe_per_share",
+            "normalized_fcf_per_share",
+        ]:
+            v = _pick(oe.get(key))
+            if v is not None:
+                return v, key
+    derived = _derive_fcf_per_share(cashflow, info)
+    if derived is not None:
+        return derived, "derived_fcf_per_share"
+    return None, None
+
+
+def _base_growth(info, oe):
+    candidates = []
+    if isinstance(oe, dict):
+        for key in [
+            "growth_rate",
+            "oe_growth_rate",
+            "owner_earnings_growth",
+            "fcf_growth_rate",
+            "normalized_growth_rate",
+        ]:
+            v = _pct_to_unit(oe.get(key))
+            if v is not None:
+                candidates.append(v)
+
+    for key in ["earningsGrowth", "revenueGrowth", "earningsQuarterlyGrowth"]:
+        v = _pct_to_unit(info.get(key))
+        if v is not None:
+            candidates.append(v)
+
+    if candidates:
+        # Use median-ish robust center: sorted middle
+        arr = sorted(candidates)
+        g = arr[len(arr)//2]
+        return _clamp(g, 0.00, 0.16)
+    return None
+
+
+def _discount_rate(info, cfg):
+    base = _cfg_value(cfg, "discount_rate", "discountRate", "required_return", default=None)
+    if base is not None:
+        return _clamp(base, 0.05, 0.15)
+    return 0.07 if _is_jp(info, cfg) else 0.10
+
+
+def _terminal_growth(info, cfg):
+    base = _cfg_value(cfg, "terminal_growth", "terminalGrowth", "g_terminal", default=None)
+    if base is not None:
+        return _clamp(base, 0.005, 0.04)
+    return 0.015 if _is_jp(info, cfg) else 0.025
+
+
+def _scenario_assumptions(info, oe, cfg):
+    g = _base_growth(info, oe)
+    r = _discount_rate(info, cfg)
+    tg = _terminal_growth(info, cfg)
+
+    if g is None:
+        g = 0.03 if _is_jp(info, cfg) else 0.06
+
+    base_g = _clamp(g, 0.00, 0.14)
+    base_r = _clamp(r, max(tg + 0.03, 0.05), 0.15)
+    base_tg = _clamp(tg, 0.005, min(0.04, base_r - 0.02))
+
+    bear = {
+        "growth": _clamp(base_g - 0.03, 0.00, 0.12),
+        "discount": _clamp(base_r + 0.02, 0.06, 0.18),
+        "terminal": _clamp(min(base_tg, max(0.005, base_tg - 0.005)), 0.005, 0.03),
+    }
+    base = {
+        "growth": base_g,
+        "discount": base_r,
+        "terminal": base_tg,
+    }
+    bull = {
+        "growth": _clamp(base_g + 0.02, 0.01, 0.18),
+        "discount": _clamp(base_r - 0.01, max(base_tg + 0.02, 0.05), 0.14),
+        "terminal": _clamp(base_tg + 0.005, 0.01, 0.04),
+    }
+
+    return {"bear": bear, "base": base, "bull": bull}
+
+
+def _dcf_per_share(oe_ps, growth, discount, terminal, years=10):
+    if oe_ps is None or oe_ps <= 0:
+        return None
+    if discount <= terminal:
+        return None
+
     pv = 0.0
+    cash = oe_ps
+    for y in range(1, years + 1):
+        cash = cash * (1.0 + growth)
+        pv += cash / ((1.0 + discount) ** y)
 
-    for t in range(1, years_high + 1):
-        oe *= (1 + growth_high)
-        pv += oe / ((1 + discount_rate) ** t)
-
-    for t in range(years_high + 1, 21):
-        oe *= (1 + growth_low)
-        pv += oe / ((1 + discount_rate) ** t)
-
-    # ターミナルバリュー（20年目以降）
-    tv = oe * (1 + terminal_growth) / (discount_rate - terminal_growth)
-    pv += tv / ((1 + discount_rate) ** 20)
-
+    terminal_cash = cash * (1.0 + terminal)
+    terminal_value = terminal_cash / (discount - terminal)
+    pv += terminal_value / ((1.0 + discount) ** years)
     return pv
 
 
-def analyze_valuation(
-    financials: pd.DataFrame,
-    cashflow: pd.DataFrame,
-    balance_sheet: pd.DataFrame,
-    info: dict,
-    owner_earnings_result: dict,
-    market_config,
-) -> Dict:
-    """
-    本質的価値計算と Margin of Safety。満点: 10 点
-    """
-    result = {
-        "score": 0,
-        "max_score": 10,
-        "intrinsic_value_dcf": None,
-        "intrinsic_value_per_per": None,
-        "margin_of_safety_dcf": None,
-        "current_price": None,
-        "pe_ratio": None,
-        "detail": "",
-    }
+def _score_mos(mos):
+    if mos is None:
+        return 3
+    if mos >= 40: return 8
+    if mos >= 25: return 7
+    if mos >= 15: return 6
+    if mos >= 5: return 5
+    if mos >= -10: return 3
+    return 1
 
-    try:
-        current_price = (
-            info.get("currentPrice")
-            or info.get("regularMarketPrice")
-            or info.get("previousClose")
-        )
-        result["current_price"] = current_price
 
-        shares = (
-            info.get("sharesOutstanding")
-            or info.get("impliedSharesOutstanding")
-        )
+def _score_pe(pe, is_financial=False):
+    if pe is None or pe <= 0:
+        return 2
+    if is_financial:
+        if pe <= 10: return 2
+        if pe <= 13: return 1.5
+        if pe <= 17: return 1.0
+        return 0.5
+    if pe <= 15: return 2
+    if pe <= 22: return 1.5
+    if pe <= 30: return 1.0
+    return 0.5
 
-        oe_latest = owner_earnings_result.get("owner_earnings_latest")
-        oe_cagr   = owner_earnings_result.get("owner_earnings_cagr")
 
-        # ─── DCF（2ステージ）──────────────────────────────────────────
-        if oe_latest and oe_latest > 0 and shares and shares > 0:
-            g_high = min(oe_cagr or market_config.min_oe_cagr, 0.20)  # 上限 20%
-            g_low  = max(g_high * 0.5, market_config.terminal_growth)
-            firm_value = _two_stage_dcf(
-                last_oe      = oe_latest,
-                growth_high  = g_high,
-                growth_low   = g_low,
-                years_high   = 10,
-                discount_rate= market_config.discount_rate,
-                terminal_growth = market_config.terminal_growth,
-            )
-            intrinsic = firm_value / shares
-            result["intrinsic_value_dcf"] = intrinsic
+def analyze_valuation(financials, cashflow, balance_sheet, info, oe, cfg):
+    price = _price(info)
+    pe_ratio = _pe(info, price)
+    pb_ratio = _pb(info, price)
+    oe_ps, oe_source = _owner_earnings_per_share(oe, cashflow, info)
+    scenarios = _scenario_assumptions(info, oe, cfg)
 
-            if current_price and current_price > 0:
-                result["margin_of_safety_dcf"] = (intrinsic - current_price) / intrinsic * 100
+    bear_val = _dcf_per_share(oe_ps, scenarios["bear"]["growth"], scenarios["bear"]["discount"], scenarios["bear"]["terminal"])
+    base_val = _dcf_per_share(oe_ps, scenarios["base"]["growth"], scenarios["base"]["discount"], scenarios["base"]["terminal"])
+    bull_val = _dcf_per_share(oe_ps, scenarios["bull"]["growth"], scenarios["bull"]["discount"], scenarios["bull"]["terminal"])
 
-        # ─── PER ベース簡易バリュエーション──────────────────────────
-        pe = info.get("trailingPE") or info.get("forwardPE")
-        result["pe_ratio"] = pe
-        eps_ttm = info.get("trailingEps") or info.get("epsCurrentYear")
-        fair_pe = 15.0  # バフェットが割安とみなす基準 PER（S&P500 平均を参考）
-        if eps_ttm and eps_ttm > 0:
-            result["intrinsic_value_per_per"] = eps_ttm * fair_pe
+    scenario_values = [v for v in [bear_val, base_val, bull_val] if v is not None]
+    conservative_value = None
+    weighted_value = None
 
-    except Exception as e:
-        result["detail"] = f"計算エラー: {e}"
-        result["score"] = 3
-        return result
+    if scenario_values:
+        conservative_value = min(scenario_values)
+        weights = []
+        vals = []
+        for name, weight, val in [("bear", 0.50, bear_val), ("base", 0.35, base_val), ("bull", 0.15, bull_val)]:
+            if val is not None:
+                weights.append(weight)
+                vals.append(val * weight)
+        if weights:
+            weighted_value = sum(vals) / sum(weights)
+
+    # Headline value is intentionally conservative for margin-of-safety discipline
+    intrinsic_value_dcf = conservative_value if conservative_value is not None else weighted_value
+
+    margin_of_safety_dcf = None
+    if price is not None and intrinsic_value_dcf is not None and intrinsic_value_dcf > 0:
+        margin_of_safety_dcf = (intrinsic_value_dcf / price - 1.0) * 100.0
+
+    is_fin = any(s in str(info.get("sector") or "").lower() for s in ["financial"]) or any(
+        s in str(info.get("industry") or "").lower() for s in ["bank", "insurance"]
+    )
 
     score = 0
-    mos = result["margin_of_safety_dcf"]
-    pe  = result["pe_ratio"]
+    score += _score_mos(margin_of_safety_dcf)
+    score += _score_pe(pe_ratio, is_financial=is_fin)
 
-    # ─── Margin of Safety スコアリング（7点）────────────────────────
-    if mos is not None:
-        if mos >= market_config.mos_excellent:
-            score += 7
-        elif mos >= market_config.mos_good:
-            score += 5
-        elif mos >= 0:
-            score += 3
-        else:
-            score += 0  # 割高
-    else:
-        score += 3  # DCF不可なら中立
+    # Slight bonus for a positive weighted/base relationship that is not wildly speculative
+    if intrinsic_value_dcf is not None and weighted_value is not None:
+        if weighted_value >= intrinsic_value_dcf * 1.10:
+            score += 0.5
 
-    # ─── PER チェック（3点）──────────────────────────────────────────
-    if pe is not None:
-        if pe <= 15:
-            score += 3
-        elif pe <= 20:
-            score += 2
-        elif pe <= 25:
-            score += 1
+    score = max(0, min(10, score))
 
-    result["score"] = min(score, 10)
-
-    sym = market_config.currency_symbol
-    iv_str  = f"{sym}{result['intrinsic_value_dcf']:.2f}"  if result["intrinsic_value_dcf"]  else "N/A"
-    cp_str  = f"{sym}{current_price:.2f}"                   if current_price                   else "N/A"
-    mos_str = f"{mos:.1f}%"                                 if mos is not None                 else "N/A"
-    pe_str  = f"{pe:.1f}x"                                  if pe  is not None                 else "N/A"
-    result["detail"] = (
-        f"本質的価値(DCF) {iv_str} | 現在株価 {cp_str} | "
-        f"MoS {mos_str} | PER {pe_str}"
+    detail = (
+        f"DCF(bear/base/bull)="
+        f"{bear_val:.2f if bear_val is not None else 0}"
     )
-    return result
+
+    def _fmt(v):
+        return f"{v:.2f}" if v is not None else "—"
+
+    detail = (
+        f"DCF { _fmt(bear_val) } / { _fmt(base_val) } / { _fmt(bull_val) }"
+        f" | OEps={_fmt(oe_ps)} ({oe_source or 'n/a'})"
+        f" | PE={_fmt(pe_ratio)}"
+        f" | MoS={margin_of_safety_dcf:.1f}%" if margin_of_safety_dcf is not None else
+        f"DCF { _fmt(bear_val) } / { _fmt(base_val) } / { _fmt(bull_val) }"
+        f" | OEps={_fmt(oe_ps)} ({oe_source or 'n/a'})"
+        f" | PE={_fmt(pe_ratio)}"
+    )
+
+    return {
+        "score": score,
+        "max_score": 10,
+        "detail": detail,
+        "price": price,
+        "pe_ratio": pe_ratio,
+        "pb_ratio": pb_ratio,
+        "owner_earnings_per_share_used": oe_ps,
+        "owner_earnings_source": oe_source,
+        "intrinsic_value_dcf": intrinsic_value_dcf,
+        "intrinsic_value_dcf_conservative": conservative_value,
+        "intrinsic_value_dcf_weighted": weighted_value,
+        "intrinsic_value_dcf_bear": bear_val,
+        "intrinsic_value_dcf_base": base_val,
+        "intrinsic_value_dcf_bull": bull_val,
+        "margin_of_safety_dcf": margin_of_safety_dcf,
+        "scenario_assumptions": scenarios,
+    }
