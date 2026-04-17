@@ -298,8 +298,9 @@ def safe_csv_download(results, filename, label="📥 CSVダウンロード"):
 
 
 def build_html_report(ticker, market, bd, info):
-    name = info.get("longName") or info.get("shortName") or ticker
-    price = info.get("currentPrice") or info.get("previousClose")
+    provider = info.get("_provider_flat", {}) if isinstance(info, dict) else {}
+    name = info.get("longName") or info.get("shortName") or provider.get("company_name") or ticker
+    price = info.get("currentPrice") or info.get("previousClose") or provider.get("market_price")
     sym = "¥" if market == "jp" else "$"
     total = get_total(bd)
     max_s = get_max_score(bd, market)
@@ -308,20 +309,16 @@ def build_html_report(ticker, market, bd, info):
     vj = get_verdict(bd, pct)
     comment = get_comment(bd)
     val = safe_get(bd, "valuation") or {}
-    iv = val.get("intrinsic_value_dcf")
+    iv = val.get("intrinsic_value_dcf") or provider.get("dcf_intrinsic")
     mos = val.get("margin_of_safety_dcf")
-    pe = val.get("pe_ratio")
-    css_cls = {"STRONG BUY":"strong-buy","BUY":"buy","WATCH":"watch","AVOID":"avoid"}.get(ve, "avoid")
+    if mos is None:
+        mos = provider.get("margin_of_safety")
+    pe = val.get("pe_ratio") or provider.get("pe_ratio")
 
-    q = get_audit_block(bd, "quality_block", 40)
-    c = get_audit_block(bd, "capital_block", 25)
-    r = get_audit_block(bd, "resilience_block", 20)
-    p = get_audit_block(bd, "price_block", 15)
-    audit = safe_get(bd, "audit") or {}
-    profile_label = audit.get("profile_label", "general")
-    bear = val.get("intrinsic_value_dcf_bear")
-    base = val.get("intrinsic_value_dcf_base")
-    bull = val.get("intrinsic_value_dcf_bull")
+    bear = val.get("intrinsic_value_dcf_bear") or provider.get("dcf_bear")
+    base = val.get("intrinsic_value_dcf_base") or provider.get("dcf_base") or provider.get("dcf_intrinsic")
+    bull = val.get("intrinsic_value_dcf_bull") or provider.get("dcf_bull")
+
 
     rows = ""
     for label, block in [("事業の質", q), ("資本配分", c), ("財務耐性", r), ("価格", p)]:
@@ -612,7 +609,10 @@ with tab1:
 
 
         st.divider()
-        html_data = build_html_report(ticker, market, bd, info)
+        html_info = dict(info or {})
+        html_info["_provider_flat"] = provider_flat
+        html_data = build_html_report(ticker, market, bd, html_info)
+
         st.download_button(
             label="📥 HTMLレポートをダウンロード",
             data=html_data.encode("utf-8"),
@@ -660,12 +660,23 @@ with tab2:
             status.text(f"分析中 [{i+1}/{total_t}] {ticker} — {universe[ticker]}")
             try:
                 fetched = fetch_ticker_data(ticker)
+
+                try:
+                    provider = get_provider()
+                    provider_data = provider.get_metrics(ticker, market=sc_market)
+                    fetched = merge_provider_into_fetched(fetched, provider_data)
+                except Exception:
+                    pass
+
                 if not has_usable_payload(fetched):
                     prog_bar.progress((i + 1) / total_t)
                     time.sleep(0.1)
                     continue
+
                 bd = run_all_modules(fetched, ticker, cfg)
                 info = fetched.get("info", {}) if isinstance(fetched, dict) else {}
+                provider_flat = fetched.get("_provider", {}) if isinstance(fetched, dict) else {}
+
                 total = get_total(bd)
                 max_s = get_max_score(bd, sc_market)
                 pct = total / max_s * 100 if max_s else 0
