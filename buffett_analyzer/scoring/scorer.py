@@ -731,9 +731,13 @@ def run_all_modules(fetched, ticker, cfg):
     bd.moat = _safe_call(moat_fn, 15, financials, info, cfg) if moat_fn else {
         "score": 0, "max_score": 15, "detail": f"import error: {moat_err}"
     }
-    bd.valuation = _safe_call(valuation_fn, 10, fetched, info, cfg) if valuation_fn else {
+    bd.valuation = _safe_call(
+        valuation_fn, 10,
+        financials, cashflow, balance_sheet, info, bd.oe, cfg
+    ) if valuation_fn else {
         "score": 0, "max_score": 10, "detail": f"import error: {valuation_err}"
     }
+
     bd.management = _safe_call(management_fn, 10, financials, cashflow, info, cfg) if management_fn else {
         "score": 0, "max_score": 10, "detail": f"import error: {management_err}"
     }
