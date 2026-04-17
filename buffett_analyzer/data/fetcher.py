@@ -28,32 +28,24 @@ def _is_valid(path: str) -> bool:
 def _safe_fetch(yft: yf.Ticker):
     """
     yfinance から 1 回だけデータ取得。
-    価格が取れない場合は None を返して呼び元でスキップさせる。
+    info や価格が微妙でも、とりあえず data を返す方針にする。
     """
     try:
-        # 軽いレート制御
         time.sleep(0.8)
 
         data = {
-            # 年次（長期トレンド用）
             "info":            yft.info,
             "financials":      yft.financials,
             "balance_sheet":   yft.balance_sheet,
             "cashflow":        yft.cashflow,
             "history":         yft.history(period="10y"),
-
-            # 四半期（最新業績反映用）
             "q_financials":    yft.quarterly_financials,
             "q_balance_sheet": yft.quarterly_balance_sheet,
             "q_cashflow":      yft.quarterly_cashflow,
         }
 
-        info = data.get("info") or {}
-        price = info.get("currentPrice") or info.get("previousClose")
-        if price is None:
-            logger.warning("価格データなし: %s", yft.ticker)
-            return None
-
+        # ここでは info/price をチェックしない
+        # スコアリング側で足りない項目は individually None 判定させる
         return data
 
     except Exception as e:
