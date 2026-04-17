@@ -5,10 +5,10 @@ import pandas as pd
 
 
 # ============================================================
-# Buffett Score Analyzer v2.1 — Phase 2: industry branching
+# Buffett Score Analyzer v2.2 — Phase 6: confidence & penalties
 # - Keeps existing app.py compatibility
-# - Adds sector / industry routing for scoring
-# - Uses different quality / resilience / price emphasis by industry
+# - Adds confidence score, missing-data penalty, and verdict guardrails
+# - Preserves legacy module outputs while improving robustness
 # ============================================================
 
 
@@ -79,6 +79,20 @@ def _text(info, *keys):
         if isinstance(v, str) and v.strip():
             return v.strip().lower()
     return ""
+
+
+def _present(v):
+    if isinstance(v, pd.DataFrame):
+        return not v.empty
+    if v is None:
+        return False
+    if isinstance(v, str):
+        return bool(v.strip())
+    return True
+
+
+def _clip(v, lo=0.0, hi=1.0):
+    return max(lo, min(hi, v))
 
 
 # ----------------------------------------------------------------------
@@ -289,7 +303,7 @@ def _score_pb_profile(info, profile="general"):
 
 
 def _score_mos_overlay(valuation_mod):
-    mos = _to_float(valuation_mod.get("margin_of_safety_dcf"))
+    mos = _to_float((valuation_mod or {}).get("margin_of_safety_dcf"))
     if mos is None:
         return 0.45, None
     if mos >= 40: return 1.00, mos
@@ -340,6 +354,124 @@ def _fallback_health(financials, balance_sheet, cashflow, info, cfg, **kwargs):
     return result
 
 
+def _extract_penalty_context(info, valuation_mod, fetched):
+    ctx = {
+        "has_history": _present((fetched or {}).get("history")),
+        "has_current_price": _present(info.get("currentPrice") or info.get("previousClose")),
+        "has_market_cap": _present(info.get("marketCap")),
+        "has_name": _present(info.get("longName") or info.get("shortName")),
+        "has_sector": _present(info.get("sector") or info.get("industry")),
+        "has_gross_margin": _present(info.get("grossMargins")),
+        "has_operating_margin": _present(info.get("operatingMargins")),
+        "has_roe": _present(info.get("returnOnEquity")),
+        "has_roa": _present(info.get("returnOnAssets")),
+        "has_de": _present(info.get("debtToEquity")),
+        "has_current_ratio": _present(info.get("currentRatio")),
+        "has_cash": _present(info.get("totalCash")),
+        "has_debt": _present(info.get("totalDebt")),
+        "has_pe": _present(info.get("trailingPE") or info.get("forwardPE")),
+        "has_pb": _present(info.get("priceToBook")),
+        "has_intrinsic": _present((valuation_mod or {}).get("intrinsic_value_dcf")),
+        "has_mos": _present((valuation_mod or {}).get("margin_of_safety_dcf")),
+        "fetch_error": (fetched or {}).get("_fetch_error") if isinstance(fetched, dict) else None,
+    }
+    return ctx
+
+
+def _compute_confidence_and_penalty(info, valuation_mod, fetched, profile):
+    ctx = _extract_penalty_context(info, valuation_mod, fetched)
+    weighted_checks = [
+        ("has_history", 0.12, "price history missing"),
+        ("has_current_price", 0.10, "current price missing"),
+        ("has_market_cap", 0.06, "market cap missing"),
+        ("has_name", 0.03, "company name missing"),
+        ("has_sector", 0.04, "sector/industry missing"),
+        ("has_gross_margin", 0.06, "gross margin missing"),
+        ("has_operating_margin", 0.05, "operating margin missing"),
+        ("has_roe", 0.10, "ROE missing"),
+        ("has_roa", 0.07, "ROA missing"),
+        ("has_de", 0.08, "debt/equity missing"),
+        ("has_current_ratio", 0.05, "current ratio missing"),
+        ("has_cash", 0.04, "cash missing"),
+        ("has_debt", 0.04, "debt missing"),
+        ("has_pe", 0.05, "PE missing"),
+        ("has_pb", 0.03, "P/B missing"),
+        ("has_intrinsic", 0.04, "intrinsic value missing"),
+        ("has_mos", 0.04, "margin of safety missing"),
+    ]
+
+    if profile in ("bank", "insurance"):
+        weighted_checks = [c for c in weighted_checks if c[0] != "has_gross_margin"]
+        weighted_checks.append(("has_pb", 0.05, "P/B missing"))
+        weighted_checks.append(("has_roa", 0.09, "ROA missing"))
+
+    total_weight = sum(w for _, w, _ in weighted_checks) or 1.0
+    confidence = 0.0
+    missing_fields = []
+    for key, w, msg in weighted_checks:
+        if ctx.get(key):
+            confidence += w
+        else:
+            missing_fields.append(msg)
+    confidence = _clip(confidence / total_weight)
+
+    penalty = 0
+    penalty_reasons = []
+
+    major_missing = []
+    for key, _, msg in weighted_checks:
+        if not ctx.get(key):
+            major_missing.append(msg)
+
+    if not ctx.get("has_current_price"):
+        penalty += 6
+        penalty_reasons.append("current price missing (-6)")
+    if not ctx.get("has_history"):
+        penalty += 5
+        penalty_reasons.append("price history missing (-5)")
+    if not ctx.get("has_roe"):
+        penalty += 5
+        penalty_reasons.append("ROE missing (-5)")
+    if not ctx.get("has_de"):
+        penalty += 4
+        penalty_reasons.append("debt/equity missing (-4)")
+    if not ctx.get("has_intrinsic"):
+        penalty += 6
+        penalty_reasons.append("intrinsic value missing (-6)")
+    if not ctx.get("has_mos"):
+        penalty += 4
+        penalty_reasons.append("margin of safety missing (-4)")
+    if ctx.get("fetch_error"):
+        penalty += 3
+        penalty_reasons.append("partial fetch error (-3)")
+
+    if profile in ("bank", "insurance") and not ctx.get("has_pb"):
+        penalty += 3
+        penalty_reasons.append("financial profile without P/B (-3)")
+
+    if confidence < 0.80:
+        penalty += 3
+        penalty_reasons.append("confidence below 0.80 (-3)")
+    if confidence < 0.65:
+        penalty += 5
+        penalty_reasons.append("confidence below 0.65 (-5)")
+    if confidence < 0.50:
+        penalty += 8
+        penalty_reasons.append("confidence below 0.50 (-8)")
+
+    penalty = min(20, penalty)
+    return {
+        "confidence": round(confidence, 3),
+        "penalty": penalty,
+        "missing_fields": major_missing,
+        "penalty_reasons": penalty_reasons,
+        "is_low_confidence": confidence < 0.65,
+        "is_very_low_confidence": confidence < 0.50,
+        "fetch_error": ctx.get("fetch_error"),
+        "context": ctx,
+    }
+
+
 @dataclass
 class ScoreBreakdown:
     earnings: dict = field(default_factory=dict)
@@ -362,13 +494,25 @@ class ScoreBreakdown:
         return 100
 
     @property
-    def total(self):
-        return int(round(
+    def raw_total(self):
+        return float(
             self.quality_block.get("score", 0)
             + self.capital_block.get("score", 0)
             + self.resilience_block.get("score", 0)
             + self.price_block.get("score", 0)
-        ))
+        )
+
+    @property
+    def penalty(self):
+        return int((self.audit or {}).get("missing_data_penalty", 0) or 0)
+
+    @property
+    def confidence(self):
+        return float((self.audit or {}).get("confidence", 0.0) or 0.0)
+
+    @property
+    def total(self):
+        return int(round(max(0.0, self.raw_total - self.penalty)))
 
     @property
     def legacy_total(self):
@@ -385,7 +529,7 @@ class ScoreBreakdown:
 
     @property
     def verdict_en(self):
-        pct = self.total / self.max_score * 100
+        pct = self.total / self.max_score * 100 if self.max_score else 0
         if pct >= 82:
             verdict = "STRONG BUY"
         elif pct >= 65:
@@ -399,6 +543,7 @@ class ScoreBreakdown:
         r = self.resilience_block.get("score", 0)
         p = self.price_block.get("score", 0)
         profile = (self.audit or {}).get("profile")
+        confidence = self.confidence
 
         if q < 18:
             verdict = "AVOID"
@@ -411,6 +556,13 @@ class ScoreBreakdown:
 
         if profile in ("bank", "insurance") and r < 10 and verdict in ("STRONG BUY", "BUY"):
             verdict = "WATCH"
+
+        if confidence < 0.50:
+            verdict = "AVOID"
+        elif confidence < 0.65 and verdict in ("STRONG BUY", "BUY"):
+            verdict = "WATCH"
+        elif confidence < 0.80 and verdict == "STRONG BUY":
+            verdict = "BUY"
 
         return verdict
 
@@ -431,6 +583,8 @@ class ScoreBreakdown:
         r = self.resilience_block.get("score", 0)
         p = self.price_block.get("score", 0)
         profile = (self.audit or {}).get("profile_label", "general")
+        confidence = self.confidence
+        penalty = self.penalty
 
         parts = [
             f"業種プロファイル {profile}",
@@ -439,15 +593,19 @@ class ScoreBreakdown:
             f"財務耐性 {r:.0f}/20",
             f"価格 {p:.0f}/15",
             f"MoS {mos_str}",
+            f"Confidence {confidence:.2f}",
+            f"Penalty -{penalty}",
         ]
 
         v = self.verdict_en
-        if v == "STRONG BUY":
+        if confidence < 0.50:
+            prefix = "データ欠損が大きく、判定の信頼性が低いため見送り優先です。"
+        elif v == "STRONG BUY":
             prefix = "高品質企業を保守的価格で見られる水準です。"
         elif v == "BUY":
             prefix = "質は十分で、価格もおおむね許容範囲です。"
         elif v == "WATCH":
-            prefix = "企業の質か価格のどちらかに改善余地があります。"
+            prefix = "企業の質か価格、またはデータ信頼性に改善余地があります。"
         else:
             prefix = "バフェット基準では見送り優先です。"
 
@@ -541,50 +699,53 @@ def _build_price_block(bd, info, profile):
     return {"score": score, "max_score": 15, "detail": detail}
 
 
-
-def run_all_modules(data, ticker, market_config):
-    cfg = market_config
-    info = data.get("info", {}) if isinstance(data, dict) else {}
-
-    fin = _ensure_df(data.get("financials") if isinstance(data, dict) else None)
-    bs = _ensure_df(data.get("balance_sheet") if isinstance(data, dict) else None)
-    cf = _ensure_df(data.get("cashflow") if isinstance(data, dict) else None)
-    q_fin = _ensure_df(data.get("q_financials") if isinstance(data, dict) else None)
-    q_bs = _ensure_df(data.get("q_balance_sheet") if isinstance(data, dict) else None)
-    q_cf = _ensure_df(data.get("q_cashflow") if isinstance(data, dict) else None)
+def run_all_modules(fetched, ticker, cfg):
+    fetched = fetched or {}
+    info = fetched.get("info") if isinstance(fetched, dict) else {}
+    info = info if isinstance(info, dict) else {}
+    financials = _ensure_df((fetched or {}).get("financials"))
+    balance_sheet = _ensure_df((fetched or {}).get("balance_sheet"))
+    cashflow = _ensure_df((fetched or {}).get("cashflow"))
 
     bd = ScoreBreakdown()
 
-    fn, err = _safe_import("buffett_analyzer.metrics.earnings", "analyze_earnings")
-    bd.earnings = _safe_call(fn, 20, fin, info) if fn else {"score": 0, "max_score": 20, "detail": f"import失敗: {err}"}
+    earnings_fn, earnings_err = _safe_import("buffett_analyzer.metrics.earnings", "analyze_earnings_consistency")
+    capital_fn, capital_err = _safe_import("buffett_analyzer.metrics.capital_efficiency", "analyze_capital_efficiency")
+    health_fn, health_err = _safe_import("buffett_analyzer.metrics.financial_health", "analyze_financial_health")
+    oe_fn, oe_err = _safe_import("buffett_analyzer.metrics.owner_earnings", "analyze_owner_earnings")
+    moat_fn, moat_err = _safe_import("buffett_analyzer.metrics.moat", "analyze_moat")
+    valuation_fn, valuation_err = _safe_import("buffett_analyzer.metrics.valuation", "analyze_valuation")
+    management_fn, management_err = _safe_import("buffett_analyzer.metrics.management", "analyze_management")
+    jp_fn, jp_err = _safe_import("buffett_analyzer.metrics.jp_fundamentals", "analyze_jp_fundamentals")
 
-    fn, err = _safe_import("buffett_analyzer.metrics.capital_efficiency", "analyze_capital_efficiency")
-    bd.capital = _safe_call(fn, 20, fin, bs, info, cfg) if fn else {"score": 0, "max_score": 20, "detail": f"import失敗: {err}"}
+    bd.earnings = _safe_call(earnings_fn, 20, financials, info, cfg) if earnings_fn else {
+        "score": 0, "max_score": 20, "detail": f"import error: {earnings_err}"
+    }
+    bd.capital = _safe_call(capital_fn, 20, financials, info, cfg) if capital_fn else {
+        "score": 0, "max_score": 20, "detail": f"import error: {capital_err}"
+    }
+    bd.health = _safe_call(health_fn, 15, financials, balance_sheet, cashflow, info, cfg) if health_fn else _fallback_health(financials, balance_sheet, cashflow, info, cfg)
+    bd.oe = _safe_call(oe_fn, 20, cashflow, info, cfg) if oe_fn else {
+        "score": 0, "max_score": 20, "detail": f"import error: {oe_err}"
+    }
+    bd.moat = _safe_call(moat_fn, 15, financials, info, cfg) if moat_fn else {
+        "score": 0, "max_score": 15, "detail": f"import error: {moat_err}"
+    }
+    bd.valuation = _safe_call(valuation_fn, 10, fetched, info, cfg) if valuation_fn else {
+        "score": 0, "max_score": 10, "detail": f"import error: {valuation_err}"
+    }
+    bd.management = _safe_call(management_fn, 10, financials, cashflow, info, cfg) if management_fn else {
+        "score": 0, "max_score": 10, "detail": f"import error: {management_err}"
+    }
 
-    fn, err = _safe_import("buffett_analyzer.metrics.financial_health", "analyze_financial_health")
-    if fn:
-        bd.health = _safe_call(fn, 15, fin, bs, cf, info, cfg, q_balance_sheet=q_bs, q_cashflow=q_cf)
+    market_name = getattr(cfg, "market", getattr(cfg, "name", ""))
+    is_jp = str(market_name).lower() == "jp" or str(ticker).upper().endswith('.T')
+    if is_jp:
+        bd.jp_fundamentals = _safe_call(jp_fn, 10, info, cfg) if jp_fn else {
+            "score": 0, "max_score": 10, "detail": f"import error: {jp_err}"
+        }
     else:
-        bd.health = _fallback_health(fin, bs, cf, info, cfg)
-        bd.health["detail"] += f" | import失敗: {err}"
-
-    fn, err = _safe_import("buffett_analyzer.metrics.owner_earnings", "analyze_owner_earnings")
-    bd.oe = _safe_call(fn, 20, fin, cf, bs, info, cfg, q_cashflow=q_cf, q_financials=q_fin) if fn else {"score": 0, "max_score": 20, "detail": f"import失敗: {err}"}
-
-    fn, err = _safe_import("buffett_analyzer.metrics.moat", "analyze_moat")
-    bd.moat = _safe_call(fn, 15, fin, cf, info, cfg) if fn else {"score": 0, "max_score": 15, "detail": f"import失敗: {err}"}
-
-    fn, err = _safe_import("buffett_analyzer.metrics.valuation", "analyze_valuation")
-    bd.valuation = _safe_call(fn, 10, fin, cf, bs, info, bd.oe, cfg) if fn else {"score": 0, "max_score": 10, "detail": f"import失敗: {err}"}
-
-    fn, err = _safe_import("buffett_analyzer.metrics.management", "analyze_management")
-    bd.management = _safe_call(fn, 10, fin, cf, bs, info, cfg) if fn else {"score": 0, "max_score": 10, "detail": f"import失敗: {err}"}
-
-    fn, err = _safe_import("buffett_analyzer.metrics.jp_fundamentals", "analyze_jp_fundamentals")
-    if fn:
-        bd.jp_fundamentals = _safe_call(fn, 10, fin, cf, bs, info, cfg)
-    else:
-        bd.jp_fundamentals = {"score": 0, "max_score": 0, "detail": f"import失敗: {err}"}
+        bd.jp_fundamentals = {"score": 0, "max_score": 10, "detail": "not applicable"}
 
     profile, profile_label = _industry_profile(info)
     bd.quality_block = _build_quality_block(bd, info, profile)
@@ -592,25 +753,31 @@ def run_all_modules(data, ticker, market_config):
     bd.resilience_block = _build_resilience_block(bd, info, profile)
     bd.price_block = _build_price_block(bd, info, profile)
 
+    cp = _compute_confidence_and_penalty(info, bd.valuation, fetched, profile)
     bd.audit = {
-        "ticker": ticker,
-        "framework": "Buffett 4-block v2.1 industry",
+        "framework": "phase6-confidence-penalty",
         "profile": profile,
         "profile_label": profile_label,
-        "legacy_total": bd.legacy_total,
         "headline_total": bd.total,
-        "quality_block": bd.quality_block,
-        "capital_block": bd.capital_block,
-        "resilience_block": bd.resilience_block,
-        "price_block": bd.price_block,
+        "headline_raw_total": round(bd.raw_total, 1),
+        "legacy_total": round(bd.legacy_total, 1),
+        "confidence": cp["confidence"],
+        "missing_data_penalty": cp["penalty"],
+        "missing_fields": cp["missing_fields"],
+        "penalty_reasons": cp["penalty_reasons"],
+        "is_low_confidence": cp["is_low_confidence"],
+        "is_very_low_confidence": cp["is_very_low_confidence"],
+        "fetch_error": cp["fetch_error"],
+        "data_presence": cp["context"],
+        "module_imports": {
+            "earnings": None if earnings_fn else str(earnings_err),
+            "capital": None if capital_fn else str(capital_err),
+            "health": None if health_fn else str(health_err),
+            "owner_earnings": None if oe_fn else str(oe_err),
+            "moat": None if moat_fn else str(moat_err),
+            "valuation": None if valuation_fn else str(valuation_err),
+            "management": None if management_fn else str(management_err),
+            "jp_fundamentals": None if jp_fn else str(jp_err),
+        },
     }
-
-    bd.management["headline_detail"] = (
-        f"profile={profile} | "
-        f"Q={bd.quality_block.get('score', 0):.1f}/40 | "
-        f"C={bd.capital_block.get('score', 0):.1f}/25 | "
-        f"R={bd.resilience_block.get('score', 0):.1f}/20 | "
-        f"P={bd.price_block.get('score', 0):.1f}/15"
-    )
-
     return bd
