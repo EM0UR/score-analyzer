@@ -92,23 +92,9 @@ def merge_provider_into_fetched(fetched, provider_data):
 
     if p.get("net_margin") is not None:
         info["profitMargins"] = info.get("profitMargins") or (p["net_margin"] / 100.0)
-        
+
     if p.get("dcf_intrinsic") is not None:
         info["providerDcfIntrinsic"] = info.get("providerDcfIntrinsic") or p["dcf_intrinsic"]
-        
-    if p.get("dcf_bear") is not None:
-        info["providerDcfBear"] = info.get("providerDcfBear") or p["dcf_bear"]
-        
-    if p.get("dcf_base") is not None:
-        info["providerDcfBase"] = info.get("providerDcfBase") or p["dcf_base"]
-        
-    if p.get("dcf_bull") is not None:
-        info["providerDcfBull"] = info.get("providerDcfBull") or p["dcf_bull"]
-        
-    if p.get("margin_of_safety") is not None:
-        info["providerMarginOfSafety"] = info.get("providerMarginOfSafety") or p["margin_of_safety"]
-            if p.get("dcf_intrinsic") is not None:
-        info["providerDcfIntrinsic"] = info.get("providerDcfIntrinsic") or p["dcf_intrinsic"]
     if p.get("dcf_bear") is not None:
         info["providerDcfBear"] = info.get("providerDcfBear") or p["dcf_bear"]
     if p.get("dcf_base") is not None:
@@ -117,12 +103,12 @@ def merge_provider_into_fetched(fetched, provider_data):
         info["providerDcfBull"] = info.get("providerDcfBull") or p["dcf_bull"]
     if p.get("margin_of_safety") is not None:
         info["providerMarginOfSafety"] = info.get("providerMarginOfSafety") or p["margin_of_safety"]
-
 
     base["info"] = info
     base["_provider"] = p
     base["_provider_audit"] = p.get("audit", {})
     return base
+
 
 
 def provider_or_none(fetched, key, default=None):
