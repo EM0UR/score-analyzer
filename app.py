@@ -657,7 +657,7 @@ with tab1:
                 st.json(provider_audit)
 
         st.divider()
-        html_data = build_html_report(ticker, market, bd, info)
+        html_data = build_html_report(ticker, market, bd, info, provider_flat)
         st.download_button(
             label="📥 HTMLレポートをダウンロード",
             data=html_data.encode("utf-8"),
