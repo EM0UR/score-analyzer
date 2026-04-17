@@ -1,3 +1,4 @@
+from data_provider import MultiSourceDataProvider
 import streamlit as st
 import sys, os, time, csv, io
 from datetime import datetime
@@ -21,6 +22,82 @@ st.markdown("""
 .small-note{font-size:12px;color:#94a3b8}
 </style>
 """, unsafe_allow_html=True)
+
+@st.cache_resource
+def get_provider():
+    return MultiSourceDataProvider()
+
+
+def merge_provider_into_fetched(fetched, provider_data):
+    base = fetched.copy() if isinstance(fetched, dict) else {}
+    info = dict(base.get("info") or {})
+    p = provider_data or {}
+
+    if p.get("company_name"):
+        info.setdefault("longName", p["company_name"])
+        info.setdefault("shortName", p["company_name"])
+
+    if p.get("sector"):
+        info.setdefault("sector", p["sector"])
+    if p.get("industry"):
+        info.setdefault("industry", p["industry"])
+    if p.get("currency"):
+        info.setdefault("currency", p["currency"])
+
+    if p.get("market_price") is not None:
+        info["currentPrice"] = info.get("currentPrice") or p["market_price"]
+        info["previousClose"] = info.get("previousClose") or p["market_price"]
+
+    if p.get("market_cap") is not None:
+        info["marketCap"] = info.get("marketCap") or p["market_cap"]
+
+    if p.get("shares_outstanding") is not None:
+        info["sharesOutstanding"] = info.get("sharesOutstanding") or p["shares_outstanding"]
+
+    if p.get("pe_ratio") is not None:
+        info["trailingPE"] = info.get("trailingPE") or p["pe_ratio"]
+        info["forwardPE"] = info.get("forwardPE") or p["pe_ratio"]
+
+    if p.get("eps") is not None:
+        info["trailingEps"] = info.get("trailingEps") or p["eps"]
+        info["forwardEps"] = info.get("forwardEps") or p["eps"]
+
+    if p.get("book_value_per_share") is not None:
+        info["bookValue"] = info.get("bookValue") or p["book_value_per_share"]
+
+    if p.get("current_ratio") is not None:
+        info["currentRatio"] = info.get("currentRatio") or p["current_ratio"]
+
+    if p.get("free_cash_flow") is not None:
+        info["freeCashflow"] = info.get("freeCashflow") or p["free_cash_flow"]
+
+    if p.get("roe") is not None:
+        info["returnOnEquity"] = info.get("returnOnEquity") or (p["roe"] / 100.0)
+
+    if p.get("debt_to_equity") is not None:
+        info["debtToEquity"] = info.get("debtToEquity") or (p["debt_to_equity"] * 100.0)
+
+    if p.get("gross_margin") is not None:
+        info["grossMargins"] = info.get("grossMargins") or (p["gross_margin"] / 100.0)
+
+    if p.get("operating_margin") is not None:
+        info["operatingMargins"] = info.get("operatingMargins") or (p["operating_margin"] / 100.0)
+
+    if p.get("net_margin") is not None:
+        info["profitMargins"] = info.get("profitMargins") or (p["net_margin"] / 100.0)
+
+    base["info"] = info
+    base["_provider"] = p
+    base["_provider_audit"] = p.get("audit", {})
+    return base
+
+
+def provider_or_none(fetched, key, default=None):
+    if not isinstance(fetched, dict):
+        return default
+    provider = fetched.get("_provider") or {}
+    return provider.get(key, default)
+
 
 
 def safe_get(obj, attr, default=None):
@@ -113,14 +190,24 @@ def color_for_ratio(r):
 def has_usable_payload(fetched):
     if not isinstance(fetched, dict):
         return False
+
     info = fetched.get("info") or {}
     history = fetched.get("history")
+    provider = fetched.get("_provider") or {}
+
     if isinstance(history, pd.DataFrame) and not history.empty:
         return True
+
     for key in ["currentPrice", "previousClose", "marketCap", "longName", "shortName", "currency"]:
         if info.get(key) is not None:
             return True
+
+    for key in ["market_price", "market_cap", "company_name", "currency"]:
+        if provider.get(key) is not None:
+            return True
+
     return False
+
 
 
 def render_fetch_debug(fetched, ticker):
@@ -467,7 +554,7 @@ with tab1:
                 if detail:
                     st.caption(detail)
             with rc:
-                st.markdown(f'<p style="color:{color};font-size:22px;font-weight:800;text-align:right;margin-top:8px">{s}<span style="font-size:13px;color:#888">/{max_m}</span></p>', unsafe_allow_html=True)
+                st.markdown(f'<pstyle="color:{color};font-size:22px;font-weight:800;text-align:right;margin-top:8px">{s}<span style="font-size:13px;color:#888">/{max_m}</span></p>', unsafe_allow_html=True)
             st.write("")
 
         st.divider()
