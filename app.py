@@ -1,6 +1,7 @@
 import streamlit as st
 import sys, os, time, csv, io
 from datetime import datetime
+import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from buffett_analyzer.data.fetcher import fetch_ticker_data
@@ -105,19 +106,49 @@ def get_audit_block(bd, key, fallback_max):
     }
 
 
-def block_ratio(block, fallback_max):
-    if not isinstance(block, dict):
-        return 0.0
-    mx = block.get("max_score", fallback_max) or fallback_max
-    sc = block.get("score", 0) or 0
-    try:
-        return float(sc) / float(mx) if mx else 0.0
-    except Exception:
-        return 0.0
-
-
 def color_for_ratio(r):
     return "#22c55e" if r >= 0.80 else "#3b82f6" if r >= 0.55 else "#f59e0b" if r >= 0.35 else "#ef4444"
+
+
+def has_usable_payload(fetched):
+    if not isinstance(fetched, dict):
+        return False
+    info = fetched.get("info") or {}
+    history = fetched.get("history")
+    if isinstance(history, pd.DataFrame) and not history.empty:
+        return True
+    for key in ["currentPrice", "previousClose", "marketCap", "longName", "shortName", "currency"]:
+        if info.get(key) is not None:
+            return True
+    return False
+
+
+def render_fetch_debug(fetched, ticker):
+    fetch_error = (fetched or {}).get("_fetch_error") if isinstance(fetched, dict) else None
+    fetch_meta = (fetched or {}).get("_fetch_meta", {}) if isinstance(fetched, dict) else {}
+    info = (fetched or {}).get("info", {}) if isinstance(fetched, dict) else {}
+
+    if fetch_error:
+        st.error(f"❌ [{ticker}] データ取得エラー: {fetch_error}")
+    else:
+        st.warning(f"⚠️ [{ticker}] データは返ったが、分析に必要な価格・基本情報が不足しています。")
+
+    with st.expander("取得診断ログを見る", expanded=True):
+        st.write({
+            "ticker": ticker,
+            "history_rows": fetch_meta.get("history_rows"),
+            "info_keys": fetch_meta.get("info_keys"),
+            "cache_dir": fetch_meta.get("cache_dir"),
+            "warnings": fetch_meta.get("warnings"),
+            "has_currentPrice": info.get("currentPrice") is not None,
+            "has_previousClose": info.get("previousClose") is not None,
+            "has_marketCap": info.get("marketCap") is not None,
+            "has_longName": info.get("longName") is not None,
+            "has_shortName": info.get("shortName") is not None,
+        })
+        if isinstance(info, dict) and info:
+            preview = {k: info.get(k) for k in ["longName","shortName","sector","industry","currency","currentPrice","previousClose","marketCap"] if k in info}
+            st.json(preview)
 
 
 def sort_results(results, sort_key):
@@ -274,11 +305,27 @@ with tab1:
             fetched = fetch_ticker_data(ticker)
 
         if fetched is None:
-            st.error(f"❌ [{ticker}] データ取得失敗。銘柄コードを確認してください。")
+            st.error(f"❌ [{ticker}] fetcher から None が返りました。fetcher.py の例外処理が未反映の可能性があります。")
             st.stop()
 
-        bd = run_all_modules(fetched, ticker, cfg)
+        if not has_usable_payload(fetched):
+            render_fetch_debug(fetched, ticker)
+            st.stop()
+
         info = fetched.get("info", {}) if isinstance(fetched, dict) else {}
+        if fetched.get("_fetch_error"):
+            st.warning(f"⚠️ 部分取得で続行します: {fetched.get('_fetch_error')}")
+            with st.expander("取得診断ログを見る"):
+                st.json(fetched.get("_fetch_meta", {}))
+
+        try:
+            bd = run_all_modules(fetched, ticker, cfg)
+        except Exception as e:
+            st.error(f"❌ スコア計算エラー: {type(e).__name__}: {e}")
+            with st.expander("取得診断ログを見る", expanded=True):
+                st.json(fetched.get("_fetch_meta", {}))
+                st.write({"info_keys": len(info) if isinstance(info, dict) else 0})
+            st.stop()
 
         name = info.get("longName") or info.get("shortName") or ticker
         sector = info.get("sector") or info.get("industry") or "—"
@@ -458,7 +505,9 @@ with tab2:
             status.text(f"分析中 [{i+1}/{total_t}] {ticker} — {universe[ticker]}")
             try:
                 fetched = fetch_ticker_data(ticker)
-                if fetched is None:
+                if not has_usable_payload(fetched):
+                    prog_bar.progress((i + 1) / total_t)
+                    time.sleep(0.1)
                     continue
                 bd = run_all_modules(fetched, ticker, cfg)
                 info = fetched.get("info", {}) if isinstance(fetched, dict) else {}
@@ -494,7 +543,7 @@ with tab2:
             except Exception:
                 pass
             prog_bar.progress((i + 1) / total_t)
-            time.sleep(0.2)
+            time.sleep(0.1)
 
         status.text(f"✅ スクリーニング完了 — {len(results)}/{total_t} 銘柄分析成功")
         if min_score > 0:
