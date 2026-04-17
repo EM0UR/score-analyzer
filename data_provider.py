@@ -1,3 +1,4 @@
+DATA_PROVIDER_BUILD = "provider-20260417-2200-dcf-fallback"
 import os
 import math
 import statistics
