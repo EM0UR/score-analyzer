@@ -22,9 +22,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# -----------------------------
-# Helpers
-# -----------------------------
 def safe_get(obj, attr, default=None):
     if hasattr(obj, attr):
         return getattr(obj, attr)
@@ -108,9 +105,55 @@ def get_audit_block(bd, key, fallback_max):
     }
 
 
-# -----------------------------
-# HTML Report
-# -----------------------------
+def block_ratio(block, fallback_max):
+    if not isinstance(block, dict):
+        return 0.0
+    mx = block.get("max_score", fallback_max) or fallback_max
+    sc = block.get("score", 0) or 0
+    try:
+        return float(sc) / float(mx) if mx else 0.0
+    except Exception:
+        return 0.0
+
+
+def color_for_ratio(r):
+    return "#22c55e" if r >= 0.80 else "#3b82f6" if r >= 0.55 else "#f59e0b" if r >= 0.35 else "#ef4444"
+
+
+def sort_results(results, sort_key):
+    keymap = {
+        "総合点": lambda x: x.get("score", 0),
+        "事業の質": lambda x: x.get("quality_score", 0),
+        "資本配分": lambda x: x.get("capital_score", 0),
+        "財務耐性": lambda x: x.get("resilience_score", 0),
+        "価格": lambda x: x.get("price_score", 0),
+        "Margin of Safety": lambda x: (-9999 if x.get("mos") is None else x.get("mos")),
+        "割安度(PER低)": lambda x: (9999 if x.get("pe") is None else -x.get("pe")),
+    }
+    fn = keymap.get(sort_key, keymap["総合点"])
+    return sorted(results, key=fn, reverse=True)
+
+
+def build_compare_rows(results, sym):
+    rows = []
+    for r in results:
+        rows.append({
+            "Ticker": r.get("ticker"),
+            "Name": r.get("name"),
+            "Profile": r.get("profile"),
+            "Score": f"{r.get('score', 0)}/{r.get('max', 100)}",
+            "Quality": f"{r.get('quality_score', 0):.1f}/40",
+            "Capital": f"{r.get('capital_score', 0):.1f}/25",
+            "Resilience": f"{r.get('resilience_score', 0):.1f}/20",
+            "Price": f"{r.get('price_score', 0):.1f}/15",
+            "MoS": f"{r.get('mos', 0):+.1f}%" if r.get('mos') is not None else "—",
+            "PE": f"{r.get('pe', 0):.1f}x" if r.get('pe') is not None else "—",
+            "PriceNow": f"{sym}{r.get('price', 0):,.2f}" if r.get('price') is not None else "—",
+            "Verdict": r.get("verdict"),
+        })
+    return rows
+
+
 def build_html_report(ticker, market, bd, info):
     name = info.get("longName") or info.get("shortName") or ticker
     price = info.get("currentPrice") or info.get("previousClose")
@@ -138,17 +181,12 @@ def build_html_report(ticker, market, bd, info):
     bull = val.get("intrinsic_value_dcf_bull")
 
     rows = ""
-    for label, block in [
-        ("事業の質", q),
-        ("資本配分", c),
-        ("財務耐性", r),
-        ("価格", p),
-    ]:
+    for label, block in [("事業の質", q), ("資本配分", c), ("財務耐性", r), ("価格", p)]:
         s = block.get("score", 0)
         m = block.get("max_score", 1)
         d = block.get("detail", "")
         ratio = (s / m * 100) if m else 0
-        clr = "#22c55e" if ratio >= 80 else "#3b82f6" if ratio >= 55 else "#f59e0b" if ratio >= 35 else "#ef4444"
+        clr = color_for_ratio((s / m) if m else 0)
         rows += (
             f'<tr><td style="color:#e2e8f0;font-weight:600">{label}</td>'
             f'<td style="width:200px"><div style="background:#334155;border-radius:4px;height:8px">'
@@ -169,12 +207,10 @@ def build_html_report(ticker, market, bd, info):
     vc = verdict_colors.get(css_cls, "#94a3b8")
 
     return f"""<!DOCTYPE html>
-<html lang="ja"><head><meta charset="UTF-8">
-<title>Buffett Report — {ticker}</title>
+<html lang="ja"><head><meta charset="UTF-8"><title>Buffett Report — {ticker}</title>
 <style>
 body{{font-family:'Segoe UI',system-ui,sans-serif;background:#0f172a;color:#f1f5f9;padding:32px 20px;margin:0}}
-.wrap{{max-width:980px;margin:0 auto}}
-h1{{font-size:24px;font-weight:800;margin-bottom:4px}}
+.wrap{{max-width:980px;margin:0 auto}} h1{{font-size:24px;font-weight:800;margin-bottom:4px}}
 .sub{{font-size:13px;color:#64748b;margin-bottom:24px}}
 .verdict{{padding:16px;border-radius:12px;text-align:center;font-size:22px;font-weight:800;background:#1e293b;border:2px solid {vc};color:{vc};margin-bottom:16px}}
 .progress-outer{{background:#1e293b;border-radius:8px;height:12px;margin:8px 0 4px}}
@@ -208,18 +244,12 @@ table{{width:100%;border-collapse:collapse}} td{{padding:10px 8px;border-bottom:
 </div></body></html>"""
 
 
-# -----------------------------
-# App UI
-# -----------------------------
 st.title("📊 Buffett Score Analyzer")
 st.caption("Warren Buffett の投資哲学に基づくスコアリングツール")
 st.divider()
 
 tab1, tab2 = st.tabs(["🔍 単銘柄分析", "📋 スクリーニング"])
 
-# ============================================================
-# TAB 1
-# ============================================================
 with tab1:
     c1, c2, c3 = st.columns([1.2, 2, 1])
     with c1:
@@ -283,18 +313,12 @@ with tab1:
             st.caption(comment)
         st.divider()
 
-        # 4-block audit cards
         st.subheader("🧭 4ブロック判定")
         q = get_audit_block(bd, "quality_block", 40)
         c = get_audit_block(bd, "capital_block", 25)
         r = get_audit_block(bd, "resilience_block", 20)
         p = get_audit_block(bd, "price_block", 15)
-        cards = [
-            ("事業の質", q),
-            ("資本配分", c),
-            ("財務耐性", r),
-            ("価格", p),
-        ]
+        cards = [("事業の質", q), ("資本配分", c), ("財務耐性", r), ("価格", p)]
         cols = st.columns(4)
         for col, (label, block) in zip(cols, cards):
             score = block.get("score", 0)
@@ -305,10 +329,8 @@ with tab1:
                 f'<div class="small-note">{block.get("detail", "")[:120]}</div></div>',
                 unsafe_allow_html=True,
             )
-
         st.divider()
 
-        # Valuation
         val_mod = safe_get(bd, "valuation") or {}
         iv = val_mod.get("intrinsic_value_dcf")
         mos = val_mod.get("margin_of_safety_dcf")
@@ -333,7 +355,6 @@ with tab1:
         s2.metric("標準 DCF", f"{sym}{base:,.2f}" if base else "—")
         s3.metric("強気 DCF", f"{sym}{bull:,.2f}" if bull else "—")
         s4.metric("加重 DCF", f"{sym}{weighted:,.2f}" if weighted else "—")
-
         st.caption(f"Owner Earnings/株として使用: {fmt_num(oe_ps)} ({oe_src or 'n/a'})")
 
         with st.expander("DCF前提を見る"):
@@ -346,10 +367,8 @@ with tab1:
                 {"scenario": "bull", "growth": fmt_pct((bull_a.get("growth") or 0) * 100 if bull_a else None), "discount": fmt_pct((bull_a.get("discount") or 0) * 100 if bull_a else None), "terminal": fmt_pct((bull_a.get("terminal") or 0) * 100 if bull_a else None)},
             ]
             st.dataframe(df_rows, use_container_width=True, hide_index=True)
-
         st.divider()
 
-        # Legacy module breakdown
         st.subheader("📋 モジュール別スコア")
         modules = [
             ("📈 収益の一貫性", "earnings", 20),
@@ -368,7 +387,7 @@ with tab1:
             s = mod.get("score", 0) if isinstance(mod, dict) else 0
             detail = mod.get("detail", "") if isinstance(mod, dict) else ""
             p_ratio = s / max_m if max_m else 0
-            color = "#22c55e" if p_ratio >= 0.80 else "#3b82f6" if p_ratio >= 0.55 else "#f59e0b" if p_ratio >= 0.35 else "#ef4444"
+            color = color_for_ratio(p_ratio)
             lc, rc = st.columns([3, 1])
             with lc:
                 st.markdown(f"**{label}**")
@@ -376,13 +395,9 @@ with tab1:
                 if detail:
                     st.caption(detail)
             with rc:
-                st.markdown(
-                    f'<p style="color:{color};font-size:22px;font-weight:800;text-align:right;margin-top:8px">{s}<span style="font-size:13px;color:#888">/{max_m}</span></p>',
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f'<p style="color:{color};font-size:22px;font-weight:800;text-align:right;margin-top:8px">{s}<span style="font-size:13px;color:#888">/{max_m}</span></p>', unsafe_allow_html=True)
             st.write("")
 
-        # Audit log / professional traceability
         st.divider()
         with st.expander("🧾 監査ログ（プロ向け）"):
             st.write({
@@ -394,7 +409,6 @@ with tab1:
             })
             st.json(audit)
 
-        # HTML download
         st.divider()
         html_data = build_html_report(ticker, market, bd, info)
         st.download_button(
@@ -406,20 +420,19 @@ with tab1:
         )
         st.caption("⚠️ このツールは教育・研究目的です。実際の投資判断はご自身の責任で行ってください。")
 
-# ============================================================
-# TAB 2
-# ============================================================
 with tab2:
     st.subheader("📋 代表銘柄スクリーニング")
     st.caption("S&P500代表約75銘柄 / TOPIX100代表約55銘柄をバフェット基準で自動スキャン")
 
-    sc1, sc2, sc3 = st.columns(3)
+    sc1, sc2, sc3, sc4 = st.columns(4)
     with sc1:
         sc_market = st.selectbox("市場", ["us", "jp"], format_func=lambda x: "🇺🇸 S&P500代表(75銘柄)" if x == "us" else "🇯🇵 TOPIX100代表(55銘柄)", key="market_screen")
     with sc2:
         top_n = st.number_input("表示上位件数", min_value=5, max_value=50, value=20, step=5)
     with sc3:
         min_score = st.number_input("最低スコア", min_value=0, max_value=90, value=0, step=5)
+    with sc4:
+        sort_by = st.selectbox("並び替え", ["総合点", "事業の質", "資本配分", "財務耐性", "価格", "Margin of Safety", "割安度(PER低)"], key="sort_screen")
 
     run_screen = st.button("🚀 スクリーニング開始", type="primary", use_container_width=True, key="run_screen")
     st.warning("⏱️ 初回は全銘柄のデータ取得のため15〜30分かかる場合があります。2回目以降はキャッシュが使われ数分で完了します。")
@@ -455,6 +468,10 @@ with tab2:
                 val = safe_get(bd, "valuation") or {}
                 cap = safe_get(bd, "capital") or {}
                 audit = safe_get(bd, "audit") or {}
+                q = get_audit_block(bd, "quality_block", 40)
+                c = get_audit_block(bd, "capital_block", 25)
+                r = get_audit_block(bd, "resilience_block", 20)
+                p = get_audit_block(bd, "price_block", 15)
                 results.append({
                     "ticker": ticker,
                     "name": (info.get("longName") or info.get("shortName") or ticker)[:25],
@@ -469,6 +486,10 @@ with tab2:
                     "roe": cap.get("roe_avg") if isinstance(cap, dict) else None,
                     "pe": val.get("pe_ratio"),
                     "price": info.get("currentPrice") or info.get("previousClose"),
+                    "quality_score": q.get("score", 0),
+                    "capital_score": c.get("score", 0),
+                    "resilience_score": r.get("score", 0),
+                    "price_score": p.get("score", 0),
                 })
             except Exception:
                 pass
@@ -476,9 +497,9 @@ with tab2:
             time.sleep(0.2)
 
         status.text(f"✅ スクリーニング完了 — {len(results)}/{total_t} 銘柄分析成功")
-        results.sort(key=lambda x: x["score"], reverse=True)
         if min_score > 0:
             results = [r for r in results if r["score"] >= min_score]
+        results = sort_results(results, sort_by)
         results = results[:int(top_n)]
 
         strong = sum(1 for r in results if r["verdict_en"] == "STRONG BUY")
@@ -490,7 +511,16 @@ with tab2:
         s2.metric("買い 🔵", buy)
         s3.metric("様子見 🟡", watch)
         s4.metric("非推奨 🔴", avoid)
+        st.caption(f"並び替え基準: {sort_by}")
         st.divider()
+
+        if results:
+            st.subheader("🆚 上位銘柄比較")
+            compare_count = min(8, len(results))
+            compare_rows = build_compare_rows(results[:compare_count], sym)
+            st.dataframe(compare_rows, use_container_width=True, hide_index=True)
+            st.caption("上位8銘柄までを、4ブロック判定・MoS・PERで横比較しています。")
+            st.divider()
 
         for rank, r in enumerate(results, 1):
             ve = r["verdict_en"]
@@ -499,18 +529,22 @@ with tab2:
             roe_s = f"{r['roe']*100:.1f}%" if r["roe"] else "—"
             pe_s = f"{r['pe']:.1f}x" if r["pe"] else "—"
             p_s = f"{sym}{r['price']:,.0f}" if r["price"] else "—"
-            c1, c2, c3, c4, c5, c6 = st.columns([0.4, 2.1, 1.7, 1, 1, 1])
+            q_s = f"Q {r['quality_score']:.1f}/40"
+            c_s = f"C {r['capital_score']:.1f}/25"
+            rr_s = f"R {r['resilience_score']:.1f}/20"
+            pr_s = f"P {r['price_score']:.1f}/15"
+            c1, c2, c3, c4, c5, c6 = st.columns([0.4, 2.2, 1.9, 1.2, 1.1, 1.1])
             c1.markdown(f"**{rank}**")
             c2.markdown(f"**{r['ticker']}** {r['name']}  \\n`{r['profile']}`")
-            c3.markdown(f'<span style="color:{color};font-weight:700">{r["verdict"]}</span> **{r["score"]}/{r["max"]}**', unsafe_allow_html=True)
-            c4.markdown(f"MoS: `{mos_s}`")
+            c3.markdown(f'<span style="color:{color};font-weight:700">{r["verdict"]}</span> **{r["score"]}/{r["max"]}**  \\n<span style="font-size:12px;color:#94a3b8">{q_s} · {c_s} · {rr_s} · {pr_s}</span>', unsafe_allow_html=True)
+            c4.markdown(f"MoS: `{mos_s}`  \\nPE: `{pe_s}`")
             c5.markdown(f"ROE: `{roe_s}`")
-            c6.markdown(f"{p_s}  \\n{pe_s}")
+            c6.markdown(f"{p_s}")
             st.divider()
 
         if results:
             buf = io.StringIO()
-            w = csv.DictWriter(buf, fieldnames=["ticker","name","sector","profile","score","max","pct","verdict","mos","roe","pe","price"])
+            w = csv.DictWriter(buf, fieldnames=["ticker","name","sector","profile","score","max","pct","verdict","mos","roe","pe","price","quality_score","capital_score","resilience_score","price_score"])
             w.writeheader()
             w.writerows(results)
             st.download_button(
