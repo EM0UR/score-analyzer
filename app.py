@@ -444,13 +444,17 @@ with tab1:
         if fetched is None:
             st.error(f"❌ [{ticker}] fetcher から None が返りました。fetcher.py の例外処理が未反映の可能性があります。")
             st.stop()
+            if provider_error:
+                st.warning(f"⚠️ Data provider 補完に失敗: {provider_error}")
 
         if not has_usable_payload(fetched):
             render_fetch_debug(fetched, ticker)
             st.stop()
 
         info = fetched.get("info", {}) if isinstance(fetched, dict) else {}
+        provider_flat = fetched.get("_provider", {}) if isinstance(fetched, dict) else {}
         if fetched.get("_fetch_error"):
+
             st.warning(f"⚠️ 部分取得で続行します: {fetched.get('_fetch_error')}")
             with st.expander("取得診断ログを見る"):
                 st.json(fetched.get("_fetch_meta", {}))
@@ -464,9 +468,9 @@ with tab1:
                 st.write({"info_keys": len(info) if isinstance(info, dict) else 0})
             st.stop()
 
-        name = info.get("longName") or info.get("shortName") or ticker
-        sector = info.get("sector") or info.get("industry") or "—"
-        price = info.get("currentPrice") or info.get("previousClose")
+        name = info.get("longName") or info.get("shortName") or provider_flat.get("company_name") or ticker
+        sector = info.get("sector") or info.get("industry") or provider_flat.get("sector") or provider_flat.get("industry") or "—"
+        price = info.get("currentPrice") or info.get("previousClose") or provider_flat.get("market_price")
         sym = cfg.currency_symbol
         mc = info.get("marketCap") or provider_flat.get("market_cap")
         audit = safe_get(bd, "audit") or {}
