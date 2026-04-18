@@ -15,6 +15,13 @@ except Exception as e:
     MultiSourceDataProvider = None
     provider_import_error = f"{type(e).__name__}: {e}"
 
+try:
+    from data_provider import MultiSourceDataProvider
+    provider_import_error = None
+except Exception as e:
+    MultiSourceDataProvider = None
+    provider_import_error = f"{type(e).__name__}: {e}"
+
 st.set_page_config(page_title="Buffett Score Analyzer", page_icon="📊", layout="centered")
 
 st.markdown("""
