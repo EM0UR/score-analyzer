@@ -209,15 +209,20 @@ def has_usable_payload(fetched):
     info = fetched.get("info") or {}
     history = fetched.get("history")
     provider = fetched.get("_provider") or {}
+
     if isinstance(history, pd.DataFrame) and not history.empty:
         return True
+
     for key in ["currentPrice", "previousClose", "marketCap", "longName", "shortName", "currency"]:
         if info.get(key) is not None:
             return True
+
     for key in ["market_price", "market_cap", "company_name", "currency"]:
         if provider.get(key) is not None:
             return True
+
     return False
+
 
 
 def render_fetch_debug(fetched, ticker):
