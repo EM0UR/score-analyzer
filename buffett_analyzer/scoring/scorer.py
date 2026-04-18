@@ -13,9 +13,15 @@ import pandas as pd
 # ============================================================
 
 
+import sys
+import importlib
+
 def _safe_import(module_path, func_name):
     try:
-        module = importlib.import_module(module_path)
+        if module_path in sys.modules:
+            module = importlib.reload(sys.modules[module_path])
+        else:
+            module = importlib.import_module(module_path)
         return getattr(module, func_name), None
     except Exception as e:
         return None, e
