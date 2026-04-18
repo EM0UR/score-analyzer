@@ -433,6 +433,13 @@ with tab1:
 
         with st.spinner(f"[{ticker}] データ取得・スコア計算中..."):
             fetched = fetch_ticker_data(ticker)
+            provider_error = None
+            try:
+                provider = get_provider()
+                provider_data = provider.get_metrics(ticker, market=market)
+                fetched = merge_provider_into_fetched(fetched, provider_data)
+            except Exception as e:
+                provider_error = f"{type(e).__name__}: {e}"
 
         if fetched is None:
             st.error(f"❌ [{ticker}] fetcher から None が返りました。fetcher.py の例外処理が未反映の可能性があります。")
