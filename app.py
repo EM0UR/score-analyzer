@@ -7,12 +7,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from buffett_analyzer.data.fetcher import fetch_ticker_data
 from buffett_analyzer.scoring.scorer import run_all_modules
 from buffett_analyzer.config import MARKET_CONFIGS
+
 try:
     from data_provider import MultiSourceDataProvider
-    _provider_import_error = None
-except Exception as _e:
+    provider_import_error = None
+except Exception as e:
     MultiSourceDataProvider = None
-    _provider_import_error = f"{type(_e).__name__}: {_e}"
+    provider_import_error = f"{type(e).__name__}: {e}"
 
 st.set_page_config(page_title="Buffett Score Analyzer", page_icon="📊", layout="centered")
 
@@ -28,10 +29,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
 @st.cache_resource
 def get_provider():
     if MultiSourceDataProvider is None:
-        raise RuntimeError(_provider_import_error or "data_provider import failed")
+        raise RuntimeError(provider_import_error or "data_provider import failed")
     return MultiSourceDataProvider()
 
 
@@ -110,13 +112,11 @@ def merge_provider_into_fetched(fetched, provider_data):
     return base
 
 
-
 def provider_or_none(fetched, key, default=None):
     if not isinstance(fetched, dict):
         return default
     provider = fetched.get("_provider") or {}
     return provider.get(key, default)
-
 
 
 def safe_get(obj, attr, default=None):
@@ -209,22 +209,17 @@ def color_for_ratio(r):
 def has_usable_payload(fetched):
     if not isinstance(fetched, dict):
         return False
-
     info = fetched.get("info") or {}
     history = fetched.get("history")
     provider = fetched.get("_provider") or {}
-
     if isinstance(history, pd.DataFrame) and not history.empty:
         return True
-
     for key in ["currentPrice", "previousClose", "marketCap", "longName", "shortName", "currency"]:
         if info.get(key) is not None:
             return True
-
     for key in ["market_price", "market_cap", "company_name", "currency"]:
         if provider.get(key) is not None:
             return True
-
     return False
 
 
@@ -315,7 +310,7 @@ def safe_csv_download(results, filename, label="📥 CSVダウンロード"):
     )
 
 
-def build_html_report(ticker, market, bd, info, provider):
+def build_html_report(ticker, market, bd, info, provider=None):
     provider = provider or {}
     name = info.get("longName") or info.get("shortName") or provider.get("company_name") or ticker
     price = info.get("currentPrice") or info.get("previousClose") or provider.get("market_price")
@@ -437,27 +432,15 @@ with tab1:
         with st.spinner(f"[{ticker}] データ取得・スコア計算中..."):
             fetched = fetch_ticker_data(ticker)
 
-            provider_error = None
-            try:
-                provider = get_provider()
-                provider_data = provider.get_metrics(ticker, market=market)
-                fetched = merge_provider_into_fetched(fetched, provider_data)
-            except Exception as e:
-                provider_error = f"{type(e).__name__}: {e}"
-
         if fetched is None:
             st.error(f"❌ [{ticker}] fetcher から None が返りました。fetcher.py の例外処理が未反映の可能性があります。")
             st.stop()
-
-        if provider_error:
-            st.warning(f"⚠️ 外部フォールバック取得は一部失敗しました: {provider_error}")
 
         if not has_usable_payload(fetched):
             render_fetch_debug(fetched, ticker)
             st.stop()
 
         info = fetched.get("info", {}) if isinstance(fetched, dict) else {}
-        provider_flat = fetched.get("_provider", {}) if isinstance(fetched, dict) else {}
         if fetched.get("_fetch_error"):
             st.warning(f"⚠️ 部分取得で続行します: {fetched.get('_fetch_error')}")
             with st.expander("取得診断ログを見る"):
@@ -472,24 +455,9 @@ with tab1:
                 st.write({"info_keys": len(info) if isinstance(info, dict) else 0})
             st.stop()
 
-        name = (
-            info.get("longName")
-            or info.get("shortName")
-            or provider_flat.get("company_name")
-            or ticker
-        )
-        sector = (
-            info.get("sector")
-            or info.get("industry")
-            or provider_flat.get("sector")
-            or provider_flat.get("industry")
-            or "—"
-        )
-        price = (
-            info.get("currentPrice")
-            or info.get("previousClose")
-            or provider_flat.get("market_price")
-        )
+        name = info.get("longName") or info.get("shortName") or ticker
+        sector = info.get("sector") or info.get("industry") or "—"
+        price = info.get("currentPrice") or info.get("previousClose")
         sym = cfg.currency_symbol
         mc = info.get("marketCap") or provider_flat.get("market_cap")
         audit = safe_get(bd, "audit") or {}
@@ -539,34 +507,13 @@ with tab1:
         st.divider()
 
         val_mod = safe_get(bd, "valuation") or {}
-
         iv = val_mod.get("intrinsic_value_dcf")
-        if iv is None:
-            iv = provider_flat.get("dcf_intrinsic")
-
         mos = val_mod.get("margin_of_safety_dcf")
-        if mos is None:
-            mos = provider_flat.get("margin_of_safety")
-
         pe = val_mod.get("pe_ratio")
-        if pe is None:
-            pe = provider_flat.get("pe_ratio")
-
         bear = val_mod.get("intrinsic_value_dcf_bear")
-        if bear is None:
-            bear = provider_flat.get("dcf_bear")
-
         base = val_mod.get("intrinsic_value_dcf_base")
-        if base is None:
-            base = provider_flat.get("dcf_base") or provider_flat.get("dcf_intrinsic")
-
         bull = val_mod.get("intrinsic_value_dcf_bull")
-        if bull is None:
-            bull = provider_flat.get("dcf_bull")
-
         weighted = val_mod.get("intrinsic_value_dcf_weighted")
-        if weighted is None:
-            weighted = provider_flat.get("dcf_base") or provider_flat.get("dcf_intrinsic")
         oe_ps = val_mod.get("owner_earnings_per_share_used")
         oe_src = val_mod.get("owner_earnings_source")
         scen = val_mod.get("scenario_assumptions") or {}
@@ -628,47 +575,6 @@ with tab1:
 
         st.divider()
         with st.expander("🧾 監査ログ（プロ向け）"):
-            import inspect
-            import buffett_analyzer.scoring.scorer as scorer_mod
-            import buffett_analyzer.metrics.valuation as valuation_mod
-            import data_provider as data_provider_mod
-            from pathlib import Path
-
-            st.write("### valuation.py first 20 lines")
-            valuation_path = Path("/mount/src/score-analyzer/buffett_analyzer/metrics/valuation.py")
-            try:
-                txt = valuation_path.read_text(encoding="utf-8")
-                st.code("\n".join(txt.splitlines()[:20]), language="python")
-            except Exception as e:
-                st.write(f"read error: {e}")
-
-            st.write("### scorer.py first 20 lines")
-            scorer_path = Path("/mount/src/score-analyzer/buffett_analyzer/scoring/scorer.py")
-            try:
-                txt2 = scorer_path.read_text(encoding="utf-8")
-                st.code("\n".join(txt2.splitlines()[:20]), language="python")
-            except Exception as e:
-                st.write(f"read error: {e}")
-
-            st.write("### data_provider.py first 20 lines")
-            provider_path = Path("/mount/src/score-analyzer/data_provider.py")
-            try:
-                txt3 = provider_path.read_text(encoding="utf-8")
-                st.code("\n".join(txt3.splitlines()[:20]), language="python")
-            except Exception as e:
-                st.write(f"read error: {e}")
-
-
-            st.write("### 実行中ファイル")
-            st.write("scorer.py:", inspect.getfile(scorer_mod))
-            st.write("valuation.py:", inspect.getfile(valuation_mod))
-            st.write("data_provider.py:", inspect.getfile(data_provider_mod))
-            st.write("### build tags")
-            st.write("SCORER_BUILD:", getattr(scorer_mod, "SCORER_BUILD", "missing"))
-            st.write("VALUATION_BUILD:", getattr(valuation_mod, "VALUATION_BUILD", "missing"))
-            st.write("DATA_PROVIDER_BUILD:", getattr(data_provider_mod, "DATA_PROVIDER_BUILD", "missing"))
-
-
             st.write({
                 "framework": audit.get("framework"),
                 "profile": audit.get("profile"),
@@ -676,21 +582,19 @@ with tab1:
                 "headline_total": audit.get("headline_total"),
                 "legacy_total": audit.get("legacy_total"),
             })
-            st.json(audit)
-            
-            st.write("### valuation raw")
+            st.json(audit or {})
+            st.write("valuation raw")
             st.json(safe_get(bd, "valuation") or {})
-
-            st.write("### provider flat")
-            st.json(provider_flat)
-
+            if provider_flat:
+                st.write("provider flat")
+                st.json(provider_flat)
             provider_audit = fetched.get("_provider_audit", {})
             if provider_audit:
-                st.write("### Data Provider Audit")
+                st.write("Data Provider Audit")
                 st.json(provider_audit)
 
-        st.divider()
-        html_data = build_html_report(ticker, market, bd, info, provider_flat)
+            st.divider()
+            html_data = build_html_report(ticker, market, bd, info, provider_flat)
         st.download_button(
             label="📥 HTMLレポートをダウンロード",
             data=html_data.encode("utf-8"),
@@ -738,14 +642,6 @@ with tab2:
             status.text(f"分析中 [{i+1}/{total_t}] {ticker} — {universe[ticker]}")
             try:
                 fetched = fetch_ticker_data(ticker)
-
-                try:
-                    provider = get_provider()
-                    provider_data = provider.get_metrics(ticker, market=sc_market)
-                    fetched = merge_provider_into_fetched(fetched, provider_data)
-                except Exception:
-                    pass
-
                 if not has_usable_payload(fetched):
                     prog_bar.progress((i + 1) / total_t)
                     time.sleep(0.1)
