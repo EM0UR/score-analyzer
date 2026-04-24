@@ -709,6 +709,9 @@ def run_all_modules(fetched, ticker, cfg):
     fetched = fetched or {}
     info = fetched.get("info") if isinstance(fetched, dict) else {}
     info = info if isinstance(info, dict) else {}
+    # ↓ 診断用（確認後に削除）
+    import streamlit as st
+    st.write("INFO KEYS DEBUG:", list(info.keys())[:20])
     financials = _ensure_df((fetched or {}).get("financials"))
     balance_sheet = _ensure_df((fetched or {}).get("balance_sheet"))
     cashflow = _ensure_df((fetched or {}).get("cashflow"))
