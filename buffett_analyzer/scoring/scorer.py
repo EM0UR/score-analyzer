@@ -727,6 +727,11 @@ def run_all_modules(fetched, ticker, cfg):
         "buffett_analyzer.metrics.financial_health",
         "analyze_financial_health"
     )
+    # ↓ 診断用（確認後に削除）
+    import streamlit as st
+    st.write("health_fn:", health_fn)
+    st.write("health_err:", health_err)
+
     oe_fn, oe_err = _safe_import(
         "buffett_analyzer.metrics.owner_earnings",
         "analyze_owner_earnings"
