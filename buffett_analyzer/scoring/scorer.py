@@ -16,15 +16,14 @@ import pandas as pd
 import sys
 import importlib
 
-def _safe_import(module_path, func_name):
+def _safe_import(module_path, attr_name=None):
     try:
-        if module_path in sys.modules:
-            module = importlib.reload(sys.modules[module_path])
-        else:
-            module = importlib.import_module(module_path)
-        return getattr(module, func_name), None
+        mod = importlib.import_module(module_path)
+        if attr_name:
+            return getattr(mod, attr_name), None
+        return mod, None
     except Exception as e:
-        return None, e
+        return None, f"{type(e).__name__}: {e}"
 
 
 def _safe_call(fn, default_max, *args, **kwargs):
