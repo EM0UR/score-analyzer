@@ -717,8 +717,9 @@ def run_all_modules(fetched, ticker, cfg):
 
     earnings_fn, earnings_err = _safe_import(
         "buffett_analyzer.metrics.earnings",
-        "analyze_earnings_consistency"
+        "analyze_earnings"
     )
+
     health_fn, health_err = _safe_import(
         "buffett_analyzer.metrics.financial_health",
         "analyze_financial_health"
