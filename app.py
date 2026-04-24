@@ -543,7 +543,7 @@ with tab1:
 
         bull = val_mod.get("intrinsic_value_dcf_bull")
         if bull is None:
-        bull = provider_flat.get("dcf_bull")
+            bull = provider_flat.get("dcf_bull")
 
         weighted = val_mod.get("intrinsic_value_dcf_weighted")
         if weighted is None:
