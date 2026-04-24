@@ -715,20 +715,39 @@ def run_all_modules(fetched, ticker, cfg):
 
     bd = ScoreBreakdown()
 
-    earnings_fn, err_earnings = _safe_import(
+    earnings_fn, earnings_err = _safe_import(
         "buffett_analyzer.metrics.earnings",
         "analyze_earnings_consistency"
     )
-
-    health_fn, err_health = _safe_import(
+    capital_fn, capital_err = _safe_import(
+        "buffett_analyzer.metrics.capital_allocation",
+        "analyze_capital_allocation"
+    )
+    health_fn, health_err = _safe_import(
         "buffett_analyzer.metrics.financial_health",
         "analyze_financial_health"
     )
-
-    jp_fn, err_jp = _safe_import(
+    oe_fn, oe_err = _safe_import(
+        "buffett_analyzer.metrics.owner_earnings",
+        "analyze_owner_earnings"
+    )
+    moat_fn, moat_err = _safe_import(
+        "buffett_analyzer.metrics.moat",
+        "analyze_moat"
+    )
+    valuation_fn, valuation_err = _safe_import(
+        "buffett_analyzer.metrics.valuation",
+        "analyze_valuation"
+    )
+    management_fn, management_err = _safe_import(
+        "buffett_analyzer.metrics.management",
+        "analyze_management"
+    )
+    jp_fn, jp_err = _safe_import(
         "buffett_analyzer.metrics.jp_fundamentals",
         "analyze_jp_fundamentals"
     )
+
 
     bd.earnings = _safe_call(earnings_fn, 20, financials, info, cfg) if earnings_fn else {
         "score": 0, "max_score": 20, "detail": f"import error: {earnings_err}"
