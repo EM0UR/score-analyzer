@@ -20,10 +20,12 @@ def _safe_import(module_path, attr_name=None):
     try:
         mod = importlib.import_module(module_path)
         if attr_name:
-            return getattr(mod, attr_name), None
+            fn = getattr(mod, attr_name)
+            return fn, None
         return mod, None
     except Exception as e:
-        return None, f"{type(e).__name__}: {e}"
+        import traceback
+        return None, traceback.format_exc()
 
 
 def _safe_call(fn, default_max, *args, **kwargs):
