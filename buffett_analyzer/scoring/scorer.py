@@ -719,10 +719,6 @@ def run_all_modules(fetched, ticker, cfg):
         "buffett_analyzer.metrics.earnings",
         "analyze_earnings_consistency"
     )
-    capital_fn, capital_err = _safe_import(
-        "buffett_analyzer.metrics.capital_allocation",
-        "analyze_capital_allocation"
-    )
     health_fn, health_err = _safe_import(
         "buffett_analyzer.metrics.financial_health",
         "analyze_financial_health"
@@ -748,20 +744,31 @@ def run_all_modules(fetched, ticker, cfg):
         "analyze_jp_fundamentals"
     )
 
-
-    bd.earnings = _safe_call(earnings_fn, 20, financials, info, cfg) if earnings_fn else {
+    bd.earnings = _safe_call(
+        earnings_fn, 20, financials, info, cfg
+    ) if earnings_fn else {
         "score": 0, "max_score": 20, "detail": f"import error: {earnings_err}"
     }
-    bd.capital = _safe_call(capital_fn, 20, financials, info, cfg) if capital_fn else {
-        "score": 0, "max_score": 20, "detail": f"import error: {capital_err}"
-    }
-    bd.health = _safe_call(health_fn, 15, financials, balance_sheet, cashflow, info, cfg) if health_fn else _fallback_health(financials, balance_sheet, cashflow, info, cfg)
-    bd.oe = _safe_call(oe_fn, 20, cashflow, info, cfg) if oe_fn else {
+
+    # capital_allocation.py が存在しないため fallback
+    bd.capital = {"score": 0, "max_score": 20, "detail": "capital_allocation module not found"}
+
+    bd.health = _safe_call(
+        health_fn, 15, financials, balance_sheet, cashflow, info, cfg
+    ) if health_fn else _fallback_health(financials, balance_sheet, cashflow, info, cfg)
+
+    bd.oe = _safe_call(
+        oe_fn, 20, financials, cashflow, balance_sheet, info, cfg
+    ) if oe_fn else {
         "score": 0, "max_score": 20, "detail": f"import error: {oe_err}"
     }
-    bd.moat = _safe_call(moat_fn, 15, financials, info, cfg) if moat_fn else {
+
+    bd.moat = _safe_call(
+        moat_fn, 15, financials, cashflow, info, cfg
+    ) if moat_fn else {
         "score": 0, "max_score": 15, "detail": f"import error: {moat_err}"
     }
+
     bd.valuation = _safe_call(
         valuation_fn, 10,
         financials, cashflow, balance_sheet, info, bd.oe, cfg
@@ -769,14 +776,18 @@ def run_all_modules(fetched, ticker, cfg):
         "score": 0, "max_score": 10, "detail": f"import error: {valuation_err}"
     }
 
-    bd.management = _safe_call(management_fn, 10, financials, cashflow, info, cfg) if management_fn else {
+    bd.management = _safe_call(
+        management_fn, 10, financials, cashflow, balance_sheet, info, cfg
+    ) if management_fn else {
         "score": 0, "max_score": 10, "detail": f"import error: {management_err}"
     }
 
     market_name = getattr(cfg, "market", getattr(cfg, "name", ""))
     is_jp = str(market_name).lower() == "jp" or str(ticker).upper().endswith('.T')
     if is_jp:
-        bd.jp_fundamentals = _safe_call(jp_fn, 10, info, cfg) if jp_fn else {
+        bd.jp_fundamentals = _safe_call(
+            jp_fn, 10, info, cfg
+        ) if jp_fn else {
             "score": 0, "max_score": 10, "detail": f"import error: {jp_err}"
         }
     else:
@@ -806,7 +817,7 @@ def run_all_modules(fetched, ticker, cfg):
         "data_presence": cp["context"],
         "module_imports": {
             "earnings": None if earnings_fn else str(earnings_err),
-            "capital": None if capital_fn else str(capital_err),
+            "capital": "capital_allocation module not found",
             "health": None if health_fn else str(health_err),
             "owner_earnings": None if oe_fn else str(oe_err),
             "moat": None if moat_fn else str(moat_err),
