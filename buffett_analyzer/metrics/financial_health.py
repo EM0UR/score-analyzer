@@ -1,4 +1,4 @@
-financial_health.py
+# financial_health.py
 # buffett_analyzer/metrics/financial_health.py
 # 依存: なし（標準Pythonのみ）
 
