@@ -711,12 +711,21 @@ def run_all_modules(fetched, ticker, cfg):
     fetched = fetched or {}
     info = fetched.get("info") if isinstance(fetched, dict) else {}
     info = info if isinstance(info, dict) else {}
-    # ↓ 診断用（確認後に削除）
-    import streamlit as st
-    st.write("INFO KEYS DEBUG:", list(info.keys())[:20])
-    financials = _ensure_df((fetched or {}).get("financials"))
-    balance_sheet = _ensure_df((fetched or {}).get("balance_sheet"))
-    cashflow = _ensure_df((fetched or {}).get("cashflow"))
+    _provider_info_keys = [
+        "grossMargins", "operatingMargins", "returnOnEquity", "returnOnAssets",
+        "debtToEquity", "currentRatio", "totalCash", "totalDebt",
+        "trailingPE", "forwardPE", "priceToBook",
+        "longName", "shortName", "sector", "industry",
+        "currentPrice", "marketCap", "ebitda",
+        "interestExpense", "totalAssets", "bookValue",
+        "sharesOutstanding", "dividendRate", "dividendYield",
+        "payoutRatio", "fiveYearAvgDividendYield",
+    ]
+    for _k in _provider_info_keys:
+        if info.get(_k) is None:
+            _v = fetched.get(_k)
+            if _v is not None:
+                info[_k] = _v
 
     bd = ScoreBreakdown()
 
