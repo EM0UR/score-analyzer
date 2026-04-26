@@ -1,4 +1,4 @@
-jp_fundamentals.py
+# jp_fundamentals.py
 import pandas as pd
 
 def _safe_row(df, *keys):
