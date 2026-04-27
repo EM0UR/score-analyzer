@@ -16,6 +16,17 @@ _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("YFINANCE_CACHE_DIR", str(_CACHE_DIR))
 
 import yfinance as yf
+import requests
+
+session = requests.Session()
+session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/124.0.0.0 Safari/537.36"
+})
+
+ticker = yf.Ticker(symbol, session=session)
+
 
 try:
     yf.set_tz_cache_location(str(_CACHE_DIR))
