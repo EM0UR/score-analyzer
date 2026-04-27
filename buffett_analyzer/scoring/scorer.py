@@ -708,7 +708,15 @@ def _build_price_block(bd, info, profile):
 
 
 def run_all_modules(fetched, ticker, cfg):
-    fetched = fetched or {}
+    fetched = fetched
+
+    # ↓ 診断用（確認後に削除）
+    import streamlit as st
+    st.write("FETCHED TOP KEYS:", list(fetched.keys()))
+    st.write("provider_", fetched.get("provider_data"))
+    st.write("gross_margin in fetched:", fetched.get("gross_margin"))
+    st.write("roe in fetched:", fetched.get("roe"))
+
     info = fetched.get("info") if isinstance(fetched, dict) else {}
     info = info if isinstance(info, dict) else {}
 
