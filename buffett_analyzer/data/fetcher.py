@@ -2,6 +2,23 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 import time
+
+def fetch_with_retry(symbol, max_retries=3, wait=5):
+    for attempt in range(max_retries):
+        try:
+            session = requests.Session()
+            session.headers.update({"User-Agent": "Mozilla/5.0 ..."})
+            ticker = yf.Ticker(symbol, session=session)
+            info = ticker.info
+            if info and len(info) > 5:  # 空じゃないか確認
+                return ticker
+        except Exception as e:
+            if "Too Many Requests" in str(e) or "Rate" in str(e):
+                time.sleep(wait * (attempt + 1))
+            else:
+                raise
+    return None
+
 import pandas as pd
 
 # ------------------------------------------------------------
