@@ -102,10 +102,38 @@ def merge_provider_into_fetched(fetched, provider_data):
     if p.get("net_margin") is not None:
         info["profitMargins"] = info.get("profitMargins") or (p["net_margin"] / 100.0)
 
+    # merge_provider_into_fetched の最後の return の直前に差し替える
+
+    # _provider には辞書化したフラットデータを入れる
     base["info"] = info
-    base["_provider"] = p
-    base["_provider_audit"] = p.get("audit", {})
+    base["_provider"] = {
+        "company_name": p.get("company_name"),
+        "sector":       p.get("sector"),
+        "industry":     p.get("industry"),
+        "market_price": p.get("market_price"),
+        "market_cap":   p.get("market_cap"),
+        "pe_ratio":     p.get("pe_ratio"),
+        "eps":          p.get("eps"),
+        "roe":          p.get("roe"),
+        "roa":          p.get("roa"),
+        "gross_margin": p.get("gross_margin"),
+        "operating_margin": p.get("operating_margin"),
+        "net_margin":   p.get("net_margin"),
+        "debt_to_equity": p.get("debt_to_equity"),
+        "current_ratio":  p.get("current_ratio"),
+        "book_value_per_share": p.get("book_value_per_share"),
+        "shares_outstanding":   p.get("shares_outstanding"),
+        "free_cash_flow":       p.get("free_cash_flow"),
+        "dcf_intrinsic":        p.get("dcf_intrinsic"),
+        "dcf_base":             p.get("dcf_base"),
+        "dcf_bear":             p.get("dcf_bear"),
+        "dcf_bull":             p.get("dcf_bull"),
+        "margin_of_safety":     p.get("margin_of_safety"),
+        "audit":                p.get("audit"),
+    } if hasattr(p, "get") or isinstance(p, dict) else {}
+    base["_provider_audit"] = (base["_provider"] or {}).get("audit", {})
     return base
+
 
 
 
