@@ -1,4 +1,8 @@
 import streamlit as st
+import os
+
+FMP_API_KEY = st.secrets.get("FMP_API_KEY") or os.getenv("FMP_API_KEY")
+
 import sys, os, time, csv, io
 from datetime import datetime
 import pandas as pd
