@@ -64,8 +64,16 @@ class MultiSourceDataProvider:
         alpha_vantage_api_key: Optional[str] = None,
         timeout: int = DEFAULT_TIMEOUT,
     ):
-        self.fmp_api_key = fmp_api_key or os.getenv("FMP_API_KEY", "")
-        self.alpha_vantage_api_key = alpha_vantage_api_key or os.getenv("ALPHAVANTAGE_API_KEY", "")
+        import streamlit as st
+
+        def _get_secret(key: str) -> str:
+            try:
+                return st.secrets.get(key) or os.getenv(key, "")
+            except Exception:
+                return os.getenv(key, "")
+        
+        self.fmp_api_key = fmp_api_key or _get_secret("FMP_API_KEY")
+        self.alpha_vantage_api_key = alpha_vantage_api_key or _get_secret("ALPHAVANTAGE_API_KEY")
         self.timeout = timeout
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": USER_AGENT})
