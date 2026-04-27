@@ -618,6 +618,14 @@ with tab1:
                 "legacy_total": audit.get("legacy_total"),
             })
             st.json(audit or {})
+            import json
+            st.download_button(
+                label="📋 監査ログをコピー（JSON）",
+                data=json.dumps(audit, ensure_ascii=False, indent=2),
+                file_name="audit_log.json",
+                mime="application/json"
+            )
+
             st.write("valuation raw")
             st.json(safe_get(bd, "valuation") or {})
             if provider_flat:
