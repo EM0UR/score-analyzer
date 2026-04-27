@@ -738,7 +738,7 @@ class MultiSourceDataProvider:
             return None
         return a * b
 
-    def _clean(self,  Dict[str, Any]) -> Dict[str, Any]:
+    def _clean(self,data, Dict[str, Any]) -> Dict[str, Any]:
         out = {}
         for k, v in data.items():
             if k.startswith("_"):
