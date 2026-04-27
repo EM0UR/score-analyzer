@@ -709,6 +709,9 @@ def _build_price_block(bd, info, profile):
 
 def run_all_modules(fetched, ticker, cfg):
     fetched = fetched
+    st.write("provider_error:", fetched.get("_provider_error"))
+    st.write("_provider:", fetched.get("_provider"))
+
 
     # ↓ 診断用（確認後に削除）
     import streamlit as st
