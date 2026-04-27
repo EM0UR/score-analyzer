@@ -45,6 +45,16 @@ def get_provider():
 
 
 def merge_provider_into_fetched(fetched, provider_data):
+    # merge_provider_into_fetched の先頭に追加
+    base = dict(fetched or {})
+    p = provider_data or {}
+
+    # provider_data が辞書かどうか確認
+    if not isinstance(p, dict):
+        base["_provider_error"] = f"provider_data is {type(p).__name__}, not dict"
+        base["_provider"] = {}
+        return base
+
     base = fetched.copy() if isinstance(fetched, dict) else {}
     info = dict(base.get("info") or {})
     p = provider_data or {}
