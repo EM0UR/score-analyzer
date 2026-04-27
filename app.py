@@ -471,10 +471,10 @@ with tab1:
 
         if fetched is None:
             st.error(f"❌ [{ticker}] fetcher から None が返りました。fetcher.py の例外処理が未反映の可能性があります。")
+        if provider_error:
+            st.warning(f"⚠️ Data provider 補完に失敗: {provider_error}")
             st.stop()
-            if provider_error:
-                st.warning(f"⚠️ Data provider 補完に失敗: {provider_error}")
-
+            
         if not has_usable_payload(fetched):
             render_fetch_debug(fetched, ticker)
             st.stop()
