@@ -207,6 +207,13 @@ def fetch_ticker_data(symbol: str, retries: int = 3, pause: float = 1.2) -> Opti
     symbol = (symbol or "").strip().upper()
     if not symbol:
         return None
+        
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/124.0.0.0 Safari/537.36"
+    })
 
     last_errors = []
 
