@@ -711,6 +711,8 @@ def run_all_modules(fetched, ticker, cfg):
     fetched = fetched or {}
     info = fetched.get("info") if isinstance(fetched, dict) else {}
     info = info if isinstance(info, dict) else {}
+
+    # ★ provider_data の財務指標を info に補完（financials より前に置く）
     _provider_info_keys = [
         "grossMargins", "operatingMargins", "returnOnEquity", "returnOnAssets",
         "debtToEquity", "currentRatio", "totalCash", "totalDebt",
@@ -727,7 +729,13 @@ def run_all_modules(fetched, ticker, cfg):
             if _v is not None:
                 info[_k] = _v
 
+    # ★ これより下に financials を置く
+    financials = _ensure_df(fetched.get("financials"))
+    balance_sheet = _ensure_df(fetched.get("balance_sheet"))
+    cashflow = _ensure_df(fetched.get("cashflow"))
+
     bd = ScoreBreakdown()
+    # … 以下続く
 
     earnings_fn, earnings_err = _safe_import(
         "buffett_analyzer.metrics.earnings",
