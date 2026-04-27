@@ -712,22 +712,38 @@ def run_all_modules(fetched, ticker, cfg):
     info = fetched.get("info") if isinstance(fetched, dict) else {}
     info = info if isinstance(info, dict) else {}
 
-    # ★ provider_data の財務指標を info に補完（financials より前に置く）
-    _provider_info_keys = [
-        "grossMargins", "operatingMargins", "returnOnEquity", "returnOnAssets",
-        "debtToEquity", "currentRatio", "totalCash", "totalDebt",
-        "trailingPE", "forwardPE", "priceToBook",
-        "longName", "shortName", "sector", "industry",
-        "currentPrice", "marketCap", "ebitda",
-        "interestExpense", "totalAssets", "bookValue",
-        "sharesOutstanding", "dividendRate", "dividendYield",
-        "payoutRatio", "fiveYearAvgDividendYield",
-    ]
-    for _k in _provider_info_keys:
-        if info.get(_k) is None:
-            _v = fetched.get(_k)
+    # provider_data の財務指標を info に補完（キー名マッピング）
+    _provider_to_info_map = {
+        # provider key          → yfinance info key
+        "gross_margin":           "grossMargins",
+        "operating_margin":       "operatingMargins",
+        "net_margin":             "profitMargins",
+        "roe":                    "returnOnEquity",
+        "roa":                    "returnOnAssets",
+        "debt_to_equity":         "debtToEquity",
+        "current_ratio":          "currentRatio",
+        "cash_and_equivalents":   "totalCash",
+        "total_debt":             "totalDebt",
+        "pe_ratio":               "trailingPE",
+        "pb_ratio":               "priceToBook",
+        "market_price":           "currentPrice",
+        "market_cap":             "marketCap",
+        "name":                   "longName",
+        "sector":                 "sector",
+        "industry":               "industry",
+        "shares_outstanding":     "sharesOutstanding",
+        "book_value_per_share":   "bookValue",
+        "revenue":                "totalRevenue",
+        "ebitda":                 "ebitda",
+    }
+    for _pkey, _ikey in _provider_to_info_map.items():
+        if info.get(_ikey) is None:
+            # fetched トップレベルと provider_data の両方を探す
+            _v = fetched.get(_pkey)
+            if _v is None:
+                _v = (fetched.get("provider_data") or {}).get(_pkey)
             if _v is not None:
-                info[_k] = _v
+                info[_ikey] = _v
 
     # ★ これより下に financials を置く
     financials = _ensure_df(fetched.get("financials"))
